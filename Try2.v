@@ -203,6 +203,7 @@ Qed.
 
 Create HintDb headstep.
 Global Hint Resolve step_once : headstep.
+Global Hint Resolve steps_step : headstep.
 Global Hint Resolve do_head_step : headstep.
 Global Hint Constructors head_step : headstep.
 Global Hint Constructors pure_step : headstep.
@@ -429,7 +430,19 @@ Definition is_val (e : expr) :=
 Lemma is_val_em (e : expr) :
   is_val e \/ ¬ is_val e.
 Proof.
-  destruct e; [left |..]; try done; right; by intro.
+  destruct e; try (by left); right; by intro.
+Qed.
+
+Definition is_pair (e : expr) :=
+  match e with
+    | EPair _ _ => True
+    | _ => False
+  end.
+
+Lemma is_pair_em (e : expr) :
+  is_pair e \/ ¬ is_pair e.
+Proof.
+  destruct e; try (by left); right; by intro.
 Qed.
 
 Lemma eventually_not_step e h :
@@ -464,16 +477,74 @@ Proof.
       * intros e0 h0 Hstep0. inv Hstep0.
         -- inv H. inv H0. done.
         -- inv H0; [|done]. by eapply Hnstep.
+  - destruct (IHe h) as (e' & h' & Hsteps & Hnstep).
+    destruct (is_pair_em e') as [Hpair | Hnpair].
+    + destruct e'; try easy. exists e'1, h'. split.
+      * eapply steps_trans.
+        -- apply steps_context_steps; [constructor | done].
+        -- eauto with headstep.
+      * intros e'' h'' Hstep. eapply Hnstep.
+        apply do_context_step with (k := fun x => EPair x e'2); [constructor | done].
+    + exists (EFst e'), h'. split.
+      * eapply steps_context_steps; [constructor | done].
+      * intros e'' h'' Hstep. inv Hstep.
+        -- inv H. inv H0. done.
+        -- inv H0. by eapply Hnstep.
+  - admit. (* Needs more general IH *)
+  - admit. (* Needs more general IH *)
+  - destruct (IHe1 h) as (e1' & h1' & Hsteps1 & Hnstep1).
+    destruct (is_val_em e1') as [Hval | Hnval].
+    2: {
+      exists (EIf e1' e2 e3), h1'. split.
+      + eapply steps_context_steps with (k := fun x => EIf x e2 e3); [constructor | done].
+      + intros e'' h'' Hstep. inv Hstep.
+        * inv H. by inv H0.
+        * inv H0. by eapply Hnstep1.
+    }
+    destruct e1'; try easy. destruct v.
+    1, 3, 4, 5: eexists _, h1'; split;
+      [ eapply steps_context_steps with (k := fun x => EIf x e2 e3); [constructor | done] |
+        intros e'' h'' Hstep; inv Hstep;
+        [ inv H; inv H0 | inv H0; inv H1; inv H; inv H0 ]].
+    destruct b. 
+    + destruct (IHe2 h1') as (e2' & h2' & Hsteps2 & Hnsteps2).
+      exists e2', h2'. split; [|done].
+      eapply steps_trans.
+      * eapply steps_context_steps with (k := fun x => EIf x e2 e3); [constructor | done].
+      * eauto with headstep.
+    + destruct (IHe3 h1') as (e3' & h3' & Hsteps3 & Hnsteps3).
+      exists e3', h3'. split; [|done].
+      eapply steps_trans.
+      * eapply steps_context_steps with (k := fun x => EIf x e2 e3); [constructor | done].
+      * eauto with headstep.
+  - destruct (IHe1 h) as (e1' & h1' & Hsteps1 & Hnstep1).
+    destruct (is_val_em e1') as [Hval | Hnval].
+    + destruct (IHe2 h1') as (e2' & h2' & Hsteps2 & Hnstep2).
+      exists e2', h2'. split; [|done].
+      eapply steps_trans.
+      * eapply steps_context_steps with (k := fun x => ESeq x e2); [constructor | done].
+      * eapply steps_step; [|done]. destruct e1'; try easy. eauto with headstep.
+    + exists (ESeq e1' e2), h1'. split.
+      * eapply steps_context_steps with (k := fun x => ESeq x e2); [constructor | done].
+      * intros e'' h'' Hstep. inv Hstep.
+        -- inv H. by inv H0.
+        -- inv H0. by eapply Hnstep1.
+  - destruct (IHe h) as (e' & h' & Hsteps & Hnstep).
+    destruct (is_val_em e') as [Hval | Hnval].
+    + destruct e'; try easy. admit. (*eexists (EVal (VRef _)), (<[ _ := (Value v) ]> h).*)
+    + exists (EAlloc e'), h'. split.
+      * apply steps_context_steps; [constructor | done].
+      * intros e'' h'' Hstep. inv Hstep.
+        -- inv H. inv H0. done.
+        -- inv H0. by eapply Hnstep.
   - admit.
   - admit.
   - admit.
-  - admit.
-  - admit.
-  - admit.
-  - admit.
-  - admit.
-  - admit.
-  - admit.
+  - destruct (IHe1 h) as (e1' & h1' & Hsteps1 & Hnstep1).
+    destruct (IHe2 h1') as (e2' & h2' & Hsteps2 & Hnstep2).
+    (* Problem: Even though e1' couldn't step when the heap was h1', maybe it can with heap h2' *)
+    (* Example: EPar (ELoad (VRef 0)) (EAlloc 0), then the left can't step if 0 is not a valid (previously freed?) location,
+       but the EAlloc may use the location, making it valid. Fundamental flaw in definition of is_error? *)
 Admitted.
 
 Lemma not_is_val_context e k :

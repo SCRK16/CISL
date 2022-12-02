@@ -95,23 +95,26 @@ Inductive head_step : expr -> heap -> expr -> heap -> Prop :=
       h !! l = Some (Value v) →
       head_step (EFree (EVal (VRef l))) h (EVal VUnit) (<[l := Reserved ]> h).
 
+Inductive ctx1 : (expr -> expr) -> Prop :=
+  | Pair_l_ctx e : ctx1 (fun x => EPair x e)
+  | Pair_r_ctx v : ctx1 (EPair (EVal v))
+  | Fst_ctx : ctx1 EFst
+  | Snd_ctx : ctx1 ESnd
+  | Let_ctx y e : ctx1 (fun x => ELet y x e)
+  | If_ctx e1 e2 : ctx1 (fun x => EIf x e1 e2)
+  | Seq_ctx e : ctx1 (fun x => ESeq x e)
+  | Alloc_ctx : ctx1 EAlloc
+  | Load_ctx : ctx1 ELoad
+  | Store_l_ctx e : ctx1 (fun x => EStore x e)
+  | Store_r_ctx v : ctx1 (EStore (EVal v))
+  | Free_ctx : ctx1 EFree
+  | Par_l_ctx e : ctx1 (fun x => EPar x e)
+  | Par_r_ctx e : ctx1 (EPar e)
+  | Id_ctx : ctx1 (fun x => x).
+
 Inductive ctx : (expr -> expr) -> Prop :=
-  | Pair_l_ctx e : ctx (fun x => EPair x e)
-  | Pair_r_ctx v : ctx (EPair (EVal v))
-  | Fst_ctx : ctx EFst
-  | Snd_ctx : ctx ESnd
-  | Let_ctx y e : ctx (fun x => ELet y x e)
-  | If_ctx e1 e2 : ctx (fun x => EIf x e1 e2)
-  | Seq_ctx e : ctx (fun x => ESeq x e)
-  | Alloc_ctx : ctx EAlloc
-  | Load_ctx : ctx ELoad
-  | Store_l_ctx e : ctx (fun x => EStore x e)
-  | Store_r_ctx v : ctx (EStore (EVal v))
-  | Free_ctx : ctx EFree
-  | Par_l_ctx e : ctx (fun x => EPar x e)
-  | Par_r_ctx e : ctx (EPar e)
-  | Id_ctx : ctx (fun x => x)
-  | Compose_ctx k1 k2 : ctx k1 -> ctx k2 -> ctx (fun x => k1 (k2 x)).
+  | Single_ctx k : ctx1 k -> ctx k
+  | Compose_ctx k1 k2 : ctx1 k1 -> ctx k2 -> ctx (fun x => k1 (k2 x)).
 
 Definition cfg : Type := expr * heap.
 
@@ -136,7 +139,7 @@ Lemma head_step_step e e' h h' :
 Proof.
   intros Hhead.
   apply (do_step (fun x => x)).
-  - constructor.
+  - repeat constructor.
   - assumption.
 Qed.
 
@@ -145,10 +148,11 @@ Lemma step_context_step e e' h h' k :
   step e h e' h' ->
   step (k e) h (k e') h'.
 Proof.
-  intros Hctx Hstep.
-  inversion Hstep.
-  apply (do_step (fun x => (k (k0 x)))); [|done].
-  by constructor.
+  intros Hctx Hstep. induction Hctx.
+  - inv Hstep. apply (do_step (fun x => (k (k0 x)))); [|done].
+    by apply Compose_ctx.
+  - inv IHHctx. apply (do_step (fun x => (k1 (k x)))); [|done].
+    by apply Compose_ctx.
 Qed.
 
 Lemma steps_context_steps e e' h h' k :
@@ -179,14 +183,9 @@ Lemma step_heap_mono e m e' m' x :
   step e m e' m' → m' ##ₘ x → m ##ₘ x.
 Proof.
   intros []?. destruct H; 
-  try (
-    inversion H0; try assumption;
-    rewrite <- H5, map_disjoint_insert_l in H1;
-    by destruct H1
-  ).
-  inversion H0; try assumption;
-    rewrite <- H7, map_disjoint_insert_l in H1;
-    by destruct H1.
+  inv H0; try assumption;
+  rewrite map_disjoint_insert_l in H1;
+  by destruct H1.
 Qed.
 
 Lemma steps_heap_mono e m e' m' x :
@@ -253,6 +252,58 @@ Proof.
     eapply steps_step; eauto.
   - intros. specialize (H _ (map_disjoint_empty_r _)).
     by rewrite !right_id_L in H.
+Qed.
+
+Definition is_val (e : expr) :=
+  match e with
+    | EVal _ => True
+    | _ => False
+  end.
+
+Lemma not_is_val_context e k :
+  ctx k -> ¬ is_val e -> ¬ is_val (k e).
+Proof.
+  intros Hctx. generalize e. induction Hctx; intros e' Hnval.
+  - destruct H; easy.
+  - destruct H; try easy. by eapply IHHctx.
+Qed.
+
+(*
+Immediate unsafe: An expression is immediately unsafe if:
+  1. It is not a value
+  2. None of the subexpressions within it can step
+*)
+
+Definition imm_unsafe (e : expr) (h : heap) :=
+  ¬ is_val e /\ forall e' h', ¬ step e h e' h'.
+
+Definition is_error (e : expr) (h : heap) :=
+  exists k e', ctx k /\ e = k e' /\ imm_unsafe e' h.
+
+Lemma unsafe_is_error e h : imm_unsafe e h -> is_error e h.
+Proof.
+  intros ?. exists (fun x => x), e. do 2 try split; eauto using ctx, ctx1.
+Qed.
+
+Lemma unsafe_ctx_is_error k e h :
+  ctx k ->
+  imm_unsafe e h ->
+  is_error (k e) h.
+Proof.
+  intros ??. by exists k, e.
+Qed.
+
+Lemma is_error_ctx k e h :
+  ctx k ->
+  is_error e h ->
+  is_error (k e) h.
+Proof.
+  intros Hctx Herr.
+  destruct Herr as (k' & e' & Hctx' & -> & Herr).
+  induction Hctx.
+  - exists (fun x => k (k' x)), e'. do 2 try split; try done. by apply Compose_ctx.
+  - destruct IHHctx as (k'' & e'' & Hctx'' & -> & Herr'').
+    exists (fun x => k1 (k'' x)), e''. do 2 try split; try done. by apply Compose_ctx.
 Qed.
 
 Delimit Scope S with S.
@@ -419,22 +470,6 @@ Global Hint Resolve iPure_intro : seplogic.
 Global Hint Resolve iPure_elim : seplogic.
 Global Hint Resolve iPure_elim' : seplogic.
 
-Definition is_val (e : expr) :=
-  match e with
-    | EVal _ => True
-    | _ => False
-  end.
-
-Lemma not_is_val_context e k :
-  ctx k -> ¬ is_val e -> ¬ is_val (k e).
-Proof.
-  intros Hctx. generalize e. induction Hctx; simpl; try easy.
-  intros e' Hnval. by apply IHHctx1, IHHctx2.
-Qed.
-
-Definition is_error (e : expr) (h : heap) :=
-  ¬ (is_val e) /\ forall e' h', not (step e h e' h').
-
 Definition IL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
   forall v h', Q v h' -> exists h, P h /\ steps e h (EVal v) h'.
 
@@ -514,12 +549,11 @@ Lemma ILERR_context (P Q : iProp) e k :
   ILERR P (k e) Q.
 Proof.
   intros Hctx H h' HQ.
-  destruct (H h' HQ) as (e' & h & HP & Hsteps & [Hnval Herr]).
-  exists (k e'), h. repeat split; [done | | |].
+  destruct (H h' HQ) as (e' & h & HP & Hsteps & (k' & es & Hctx' & Heq & Herr)).
+  exists (k e'), h. repeat split; [done | | ].
   - by apply steps_context_steps.
-  - by apply not_is_val_context.
-  - admit.
-Admitted.
+  - simplify_eq. do 2 (apply is_error_ctx; [done|]). by apply unsafe_is_error.
+Qed.
 
 Lemma ISLERR_context (P Q : iProp) e k :
   ctx k ->
@@ -579,72 +613,17 @@ Lemma ISL_seq (P : iProp) (Q R : val -> iProp) e1 e2 :
   ISL P (ESeq e1 e2) Q.
 Proof.
   intros HPR HRQ.
-  eapply ISL_context with (k := fun x => ESeq x e2); eauto using ctx.
+  eapply ISL_context with (k := fun x => ESeq x e2); eauto using ctx, ctx1.
   destruct HRQ as [v HRQ].
   exists v. by apply ISL_seq_val.
 Qed.
-
-Lemma ctx_id k e :
-  ctx k ->
-  k e = e ->
-  k = fun x => x.
-Proof.
-  intros Hctx Heq. Search (fun x => x).
-  f_equal. admit.
-Admitted.
-
-Lemma ctx_seq k e e1 e2 :
-  ctx k ->
-  k e = ESeq e1 e2 ->
-  (exists k', ctx k' /\ k = (fun x => ESeq x e2) /\ k' e = e1) \/ (k = (fun x => x) /\ e = ESeq e1 e2).
-Proof.
-  intros H1 Heq. revert Heq. revert e.
-  induction H1; intros e' Heq; try done.
-  - injection Heq. intros -> ->. left. exists (fun x => x). repeat split; try done; constructor.
-  - by right.
-  - destruct (IHctx1 (k2 e')) as [(h' & Hctx & Hk & He) | [Hk He]]; try done.
-    + rewrite Hk in Heq. injection Heq. intros Heq2.
-      rewrite Heq2 in He. apply ctx_id in He; [|done]. admit.
-Admitted.
-
-Lemma seq_step e1 e2 e' h h' :
-  step (ESeq e1 e2) h e' h' ->
-  (exists v, e1 = EVal v /\ e2 = e') \/ (exists e0, step e1 h e0 h' /\ e' = ESeq e0 e2).
-Proof.
-  intros Hstep.
-  inv Hstep. apply head_step_step in H1. revert H1 H. revert e.
-  induction H0; intros e' H1 H; simplify_eq.
-  - right. exists e'0. by split.
-  - admit. (*inv H1. inv H. inv H2.  left. by exists v.*)
-  - admit.
-Admitted.
-
-Lemma not_step_seq e1 e2 h :
-  is_error e1 h ->
-  is_error (ESeq e1 e2) h.
-Proof.
-  intros [Hnval Hnstep].
-  split; [easy |].
-  intros e' h' Hstep.
-  inv Hstep. revert H1 H. generalize e. generalize e'0. induction H0; intros e'1 e0' H1 H; simplify_eq.
-  - by eapply Hnstep, head_step_step.
-  - inv H1. inv H. by apply Hnval.
-  - inv H0_.
-    + eapply Hnstep, step_context_step; [done|].
-      by apply head_step_step.
-    + by eapply IHctx2.
-    + admit.
-Admitted.
 
 Lemma ISLERR_seq (P Q : iProp) e1 e2 :
   ISLERR P e1 Q ->
   ISLERR P (ESeq e1 e2) Q.
 Proof.
-  intros HPQ R h' HQ.
-  destruct (HPQ R h' HQ) as (e & h & HP & Hsteps & Herr).
-  exists (ESeq e e2), h. do 2 try split; [done | | ] .
-  - apply steps_context_steps with (k := fun x => ESeq x e2); [constructor | done].
-  - by apply not_step_seq.
+  intros HPQ.
+  apply ISLERR_context with (k := fun x => ESeq x e2); [repeat constructor| done].
 Qed.
 
 (* EPar rules *)
@@ -682,14 +661,14 @@ Lemma ISL_par (P1 P2 : iProp) (Q1 Q2 : val -> iProp) e1 e2 v1 v2 :
 Proof.
   intros H1 H2.
   eapply (ISL_context _ _ _ _ (fun x => EPar x e2)).
-  - constructor.
+  - repeat constructor.
   - intros R. specialize (H1 (P2 ∗ R)%S).
     eapply IL_cons; [| | done].
     + apply iSep_assoc.
     + simpl. intros v.
       apply iSep_assoc'.
   - simpl. exists v1. eapply ISL_context.
-    + constructor.
+    + repeat constructor.
     + intros R. specialize (H2 (Q1 v1 ∗ R)%S).
       eapply IL_cons; [| | done].
       * eapply iEntails_trans.
@@ -705,11 +684,14 @@ Proof.
       apply iSep_mono; by [apply iPure_intro | apply iSep_comm].
 Qed.
 
-Lemma ISL_par_err (P1 P2 Q1 Q2 : iProp) (e1 e2 : expr) :
-  (ISLERR P1 e1 Q1 \/ ISLERR P2 e2 Q2) ->
-  ISLERR (P1 ∗ P2)%S (EPar e1 e2) (Q1 ∗ Q2)%S.
+Lemma ISL_par_err (P Q : iProp) (e1 e2 : expr) :
+  (ISLERR P e1 Q \/ ISLERR P e2 Q) ->
+  ISLERR P (EPar e1 e2) Q.
 Proof.
-Admitted.
+  intros [H | H].
+  - apply ISLERR_context with (k := fun x => EPar x e2); [repeat constructor | done].
+  - apply ISLERR_context with (k := fun x => EPar e1 x); [repeat constructor | done].
+Qed.
 
 Lemma ISL_par_l (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
   ISL P e1 R ->
@@ -723,10 +705,10 @@ Proof.
   eapply steps_trans.
   {
     apply steps_context_steps with (k := fun x => EPar (ESeq x e2) e3); [|done].
-    apply (Compose_ctx (fun x => EPar x e3)); constructor.
+    apply (Compose_ctx (fun x => EPar x e3)); repeat constructor.
   }
   eapply steps_trans; [|done].
-  eapply steps_context_steps with (k := fun x => EPar x e3); [constructor|].
+  eapply steps_context_steps with (k := fun x => EPar x e3); [repeat constructor|].
   eauto with headstep.
 Qed.
 
@@ -742,9 +724,9 @@ Proof.
   eapply steps_trans.
   {
     apply steps_context_steps with (k := fun x => EPar e1 (ESeq x e3)); [|done].
-    apply Compose_ctx; constructor.
+    apply Compose_ctx; repeat constructor.
   }
   eapply steps_trans; [|done].
-  eapply steps_context_steps; [constructor|].
+  eapply steps_context_steps; [repeat constructor|].
   eauto with headstep.
 Qed.

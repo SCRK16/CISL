@@ -589,15 +589,8 @@ Lemma ctx_id k e :
   k e = e ->
   k = fun x => x.
 Proof.
-  intros Hctx Heq. revert Heq. revert e.
-  induction Hctx; intros e' Heq; try (exfalso; induction e'; try done; injection Heq; intros; simplify_eq).
-  - done.
-  - specialize (IHHctx1 (k2 e')).
-    assert (k2 e' = e').
-    2: {
-      rewrite H in Heq. rewrite H in IHHctx1. specialize (IHHctx1 Heq).
-      rewrite IHHctx1. Search "eta".
-admit.
+  intros Hctx Heq. Search (fun x => x).
+  f_equal. admit.
 Admitted.
 
 Lemma ctx_seq k e e1 e2 :
