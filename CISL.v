@@ -69,14 +69,14 @@ Inductive pure_step : expr -> expr -> Prop :=
 
 (* Either a value or reserved (previously freed)
    Corresponds to memory locations *)
-Inductive loc :=
-  | Value : val -> loc
-  | Reserved : loc.
+Inductive cell :=
+  | Value : val -> cell
+  | Reserved : cell.
 
-(* A heap maps a natural number to a memery location *)
-Notation heap := (gmap nat loc).
+(* A heap maps a natural number to a memory location *)
+Notation heap := (gmap nat cell).
 
-Definition valid_alloc (h : heap) (n : nat) := ∀ e, h !! n = Some e → e = Reserved.
+Definition valid_alloc (h : heap) (n : nat) := ∀ c, h !! n = Some c → c = Reserved.
 
 Inductive head_step : expr -> heap -> expr -> heap -> Prop :=
   | do_pure_step e e' h :
@@ -109,12 +109,30 @@ Inductive ctx1 : (expr -> expr) -> Prop :=
   | Store_r_ctx v : ctx1 (EStore (EVal v))
   | Free_ctx : ctx1 EFree
   | Par_l_ctx e : ctx1 (fun x => EPar x e)
-  | Par_r_ctx e : ctx1 (EPar e)
-  | Id_ctx : ctx1 (fun x => x).
+  | Par_r_ctx e : ctx1 (EPar e).
 
 Inductive ctx : (expr -> expr) -> Prop :=
-  | Single_ctx k : ctx1 k -> ctx k
+  | Id_ctx : ctx (fun x => x)
   | Compose_ctx k1 k2 : ctx1 k1 -> ctx k2 -> ctx (fun x => k1 (k2 x)).
+
+Lemma Single_ctx k : ctx1 k -> ctx k.
+Proof.
+  intros Hk. apply Compose_ctx; [done | constructor].
+Qed.
+
+Create HintDb context.
+Global Hint Resolve Single_ctx : context.
+Global Hint Constructors ctx1 : context.
+Global Hint Constructors ctx : context.
+
+Lemma context_EVal k e v :
+  ctx k -> 
+  k e = EVal v ->
+  k = (fun x => x) /\ e = EVal v.
+Proof.
+  intros Hk. induction Hk; [done|].
+  intros Hk12. inv H.
+Qed.
 
 Definition cfg : Type := expr * heap.
 
@@ -132,7 +150,7 @@ Inductive steps : expr -> heap -> expr -> heap -> Prop :=
       steps e2 h2 e3 h3 ->
       steps e1 h1 e3 h3.
 
-Strategy 100 [Acc_intro_generator].
+Strategy 100 [Acc_intro_generator]. (* Remove? *)
 
 Lemma head_step_step e e' h h' :
   head_step e h e' h' -> step e h e' h'.
@@ -148,11 +166,9 @@ Lemma step_context_step e e' h h' k :
   step e h e' h' ->
   step (k e) h (k e') h'.
 Proof.
-  intros Hctx Hstep. induction Hctx.
-  - inv Hstep. apply (do_step (fun x => (k (k0 x)))); [|done].
-    by apply Compose_ctx.
-  - inv IHHctx. apply (do_step (fun x => (k1 (k x)))); [|done].
-    by apply Compose_ctx.
+  intros Hctx Hstep. induction Hctx; [done|].
+  inv IHHctx. apply (do_step (fun x => (k1 (k x)))); [|done].
+  by apply Compose_ctx.
 Qed.
 
 Lemma steps_context_steps e e' h h' k :
@@ -179,8 +195,10 @@ Global Hint Resolve head_step_step : headstep.
 Global Hint Constructors head_step : headstep.
 Global Hint Constructors pure_step : headstep.
 
+Infix "###" := map_disjoint (at level 70). (* Replace everywhere *)
+
 Lemma step_heap_mono e m e' m' x :
-  step e m e' m' → m' ##ₘ x → m ##ₘ x.
+  step e m e' m' → m' ### x → m ### x.
 Proof.
   intros []?. destruct H; 
   inv H0; try assumption;
@@ -263,9 +281,8 @@ Definition is_val (e : expr) :=
 Lemma not_is_val_context e k :
   ctx k -> ¬ is_val e -> ¬ is_val (k e).
 Proof.
-  intros Hctx. generalize e. induction Hctx; intros e' Hnval.
-  - destruct H; easy.
-  - destruct H; try easy. by eapply IHHctx.
+  intros Hctx. generalize e. induction Hctx; intros e' Hnval;
+  [done | destruct H; easy].
 Qed.
 
 (*
@@ -282,7 +299,7 @@ Definition is_error (e : expr) (h : heap) :=
 
 Lemma unsafe_is_error e h : imm_unsafe e h -> is_error e h.
 Proof.
-  intros ?. exists (fun x => x), e. do 2 try split; eauto using ctx, ctx1.
+  intros ?. exists (fun x => x), e. do 2 try split; eauto with context.
 Qed.
 
 Lemma unsafe_ctx_is_error k e h :
@@ -301,7 +318,8 @@ Proof.
   intros Hctx Herr.
   destruct Herr as (k' & e' & Hctx' & -> & Herr).
   induction Hctx.
-  - exists (fun x => k (k' x)), e'. do 2 try split; try done. by apply Compose_ctx.
+  - exists k', e'. by do 2 try split.
+
   - destruct IHHctx as (k'' & e'' & Hctx'' & -> & Herr'').
     exists (fun x => k1 (k'' x)), e''. do 2 try split; try done. by apply Compose_ctx.
 Qed.
@@ -309,6 +327,8 @@ Qed.
 Delimit Scope S with S.
 
 Definition iProp := heap → Prop.
+
+Bind Scope S with iProp.
 
 Definition iEntails (P Q : iProp) : Prop := ∀ m, P m → Q m.
 Definition iEmp : iProp := λ m, m = ∅.
@@ -480,6 +500,8 @@ Global Hint Resolve iPure_intro' : seplogic.
 Global Hint Resolve iPure_elim : seplogic.
 Global Hint Resolve iPure_elim' : seplogic.
 
+(* Notation for triples *)
+
 Definition IL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
   forall v h', Q v h' -> exists h, P h /\ steps e h (EVal v) h'.
 
@@ -492,7 +514,7 @@ Definition ISL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
 Definition ISLERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
   forall R, ILERR (P ∗ R)%S e (Q ∗ R)%S.
 
-Lemma ISL_val (v : val) : ISL (emp)%S (EVal v) (fun x => @[ x = v ])%S.
+Lemma ISL_val (v : val) : ISL emp (EVal v) (fun x => @[ x = v ])%S.
 Proof.
   intros R v' h' HP.
   exists h'. inversion HP. destruct H as (h2 & [-> ->] & HR & -> & Hx).
@@ -573,6 +595,8 @@ Proof.
   intros Hctx H R.
   by apply ILERR_context.
 Qed.
+
+(* ISLERR_context_ISL met exists ipv @[x = v] *)
 
 Lemma ISLERR_context_ISL (P Q : iProp) (R : val -> iProp) e v k :
   ctx k ->
@@ -679,13 +703,11 @@ Qed.
 Lemma ISL_frame_left (R P : iProp) (Q : val -> iProp) e :
   ISL P e Q -> ISL (R ∗ P)%S e (fun x => R ∗ Q x)%S.
 Proof.
-  intros HPQ W v h' HRQW.
-  destruct (HPQ (R ∗ W)%S v h') as (h & HRPW & Hsteps).
-  - apply iSep_assoc'. eapply iSep_mono_l; [|done].
-    apply iSep_comm.
-  - exists h. split; [|done].
-    apply iSep_assoc in HRPW. eapply iSep_mono_l; [|done].
-    apply iSep_comm.
+  intros HPQ.
+  apply (ISL_cons _ (P ∗ R) _ (fun x => Q x ∗ R)%S).
+  - apply iSep_comm.
+  - intros v. apply iSep_comm.
+  - by apply ISL_frame.
 Qed.
 
 Lemma ISLERR_frame (R P Q : iProp) e :
@@ -748,7 +770,18 @@ Proof.
   apply do_step; by [|constructor].
 Qed.
 
+(* Quantifier rules *)
+Lemma ISL_exists_post {A} (P : iProp) (Q : A -> val -> iProp) e :
+  (forall s, ISL P e (Q s)) ->
+  ISL P e (fun x => ∃ s, Q s x)%S.
+Proof.
+  intros H R v h' (h1 & h2 & [s Hs] & H2 & -> & Hdisj).
+  apply (H s R v). by exists h1, h2.
+Qed.
+
 (* Disjunction rules *)
+
+(* Change to [P] e [Q1] -> [P] e [Q2] -> [P] e [Q1 \/ Q2] *)
 
 Lemma IL_disj (P P' : iProp) (Q Q' : val -> iProp) e :
   IL P e Q ->
@@ -793,15 +826,39 @@ Proof.
   1,2: eauto using iOr_distr, iOr_distr'.
 Qed.
 
-(* Seq rules *)
+(* Pure rules *)
+
+Lemma ISL_pure (P : iProp) (Q : val -> iProp) (phi : Prop) e :
+  (phi -> ISL P e Q) -> ISL P e (fun x => @[phi] ∗ Q x)%S.
+Proof.
+  intros H R v h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
+  rewrite left_id. rewrite left_id in Hdisj.
+  destruct (H Hphi R v (hQ ∪ hR)) as (h & HP & Hsteps); [exists hQ, hR|]; eauto.
+Qed.
+
+Lemma ISL_pure' (P : iProp) (Q : val -> iProp) (phi : val -> Prop) e :
+  ((exists x, phi x) -> ISL P e Q) -> ISL P e (fun x => @[phi x] ∗ Q x)%S.
+Proof.
+  intros H R v h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
+  rewrite left_id. rewrite left_id in Hdisj.
+  destruct (H (ex_intro _ _ Hphi) R v (hQ ∪ hR)) as (h & HP & Hsteps); [exists hQ, hR|]; eauto.
+Qed.
+
+Lemma ISLERR_pure (P Q : iProp) (phi : Prop) e :
+  (phi -> ISLERR P e Q) -> ISLERR P e (@[phi] ∗ Q).
+Proof.
+  intros H R h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
+  rewrite left_id. rewrite left_id in Hdisj.
+  destruct (H Hphi R (hQ ∪ hR)) as (h & HP & Hsteps); [exists hQ, hR|]; eauto.
+Qed.
+
+(* ESeq rules *)
+
 Lemma ISL_seq_val (P : iProp) (Q : val -> iProp) v e :
   ISL P e Q -> ISL P (ESeq (EVal v) e) Q.
 Proof.
-  intros HPQ R v' h' HQ.
-  destruct (HPQ R v' h' HQ) as (h & HP & Hsteps).
-  exists h. split; [done|].
-  eapply steps_step; [|done].
-  eauto with headstep.
+  intros HPQ.
+  eapply ISL_pure_step; [done | constructor].
 Qed.
 
 Lemma ISL_seq (P : iProp) (Q R : val -> iProp) e1 e2 :
@@ -810,7 +867,8 @@ Lemma ISL_seq (P : iProp) (Q R : val -> iProp) e1 e2 :
   ISL P (ESeq e1 e2) Q.
 Proof.
   intros HPR HRQ.
-  eapply ISL_context with (k := fun x => ESeq x e2); eauto using ctx, ctx1.
+  eapply ISL_context with (k := fun x => ESeq x e2);
+  eauto with context.
   destruct HRQ as [v HRQ].
   exists v. by apply ISL_seq_val.
 Qed.
@@ -820,7 +878,8 @@ Lemma ISLERR_seq (P Q : iProp) e1 e2 :
   ISLERR P (ESeq e1 e2) Q.
 Proof.
   intros HPQ.
-  apply ISLERR_context with (k := fun x => ESeq x e2); [repeat constructor| done].
+  apply ISLERR_context with (k := fun x => ESeq x e2);
+  [eauto with context | done].
 Qed.
 
 Lemma ISLERR_seq_right (P Q : iProp) (R : val -> iProp) e1 e2 :
@@ -829,10 +888,245 @@ Lemma ISLERR_seq_right (P Q : iProp) (R : val -> iProp) e1 e2 :
   ISLERR P (ESeq e1 e2) Q.
 Proof.
   intros HPR [v HRQ].
-  eapply ISLERR_context_ISL with (k := fun x => ESeq x e2); [repeat constructor | |].
+  eapply ISLERR_context_ISL with (k := fun x => ESeq x e2);
+  [eauto with context | |].
   - eapply ISL_cons; [apply iEntails_refl | | done].
     intros v'. apply iPure_elim. intros ->. apply iEntails_refl.
   - eapply ISLERR_pure_step; [done | constructor].
+Qed.
+
+(* EIf rules *)
+
+Lemma ISL_if_true (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
+  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
+  ISL (R (VBool true)) e2 Q ->
+  ISL P (EIf e1 e2 e3) Q.
+Proof.
+  intros HPR HRQ.
+  eapply ISL_context with (k := fun x => EIf x e2 e3);
+  [eauto with context | apply HPR | exists (VBool true)].
+  eapply ISL_cons.
+  3: { eapply ISL_pure_step; [apply HRQ | constructor]. }
+  - eapply iEntails_trans; [|by apply iSep_mono_l, iPure_intro].
+    apply iSep_emp_l.
+  - easy.
+Qed.
+
+Lemma ISL_if_false (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
+  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
+  ISL (R (VBool false)) e3 Q ->
+  ISL P (EIf e1 e2 e3) Q.
+Proof.
+  intros HPR HRQ.
+  eapply ISL_context with (k := fun x => EIf x e2 e3);
+  [eauto with context | apply HPR | exists (VBool false)].
+  eapply ISL_cons.
+  3: { eapply ISL_pure_step; [apply HRQ | constructor]. }
+  - eapply iEntails_trans; [|by apply iSep_mono_l, iPure_intro].
+    apply iSep_emp_l.
+  - easy.
+Qed.
+
+Lemma ISLERR_if (P Q : iProp) e1 e2 e3 :
+  ISLERR P e1 Q ->
+  ISLERR P (EIf e1 e2 e3) Q.
+Proof.
+  intros HPQ.
+  eapply ISLERR_context with (k := fun x => EIf x e2 e3);
+  [eauto with context | done].
+Qed.
+
+Lemma ISLERR_if_true (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
+  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
+  ISLERR (R (VBool true)) e2 Q ->
+  ISLERR P (EIf e1 e2 e3) Q.
+Proof.
+  intros HPR HRQ.
+  eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3);
+  [eauto with context | done |].
+  eapply ISLERR_pure_step; [done | constructor].
+Qed.
+
+Lemma ISLERR_if_false (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
+  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
+  ISLERR (R (VBool false)) e3 Q ->
+  ISLERR P (EIf e1 e2 e3) Q.
+Proof.
+  intros HPR HRQ.
+  eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3);
+  [eauto with context | done |].
+  eapply ISLERR_pure_step; [done | constructor].
+Qed.
+
+(* EAlloc rules *)
+
+Ltac empty_left H := rewrite left_id; rewrite left_id in H.
+
+(* The basic behavior of alloc *)
+Lemma ISL_Alloc_val l v :
+  ISL emp (EAlloc (EVal v)) (fun x => @[x = VRef l] ∗ l ↦ v)%S.
+Proof.
+  intros R v0 h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
+  empty_left Hdisj.
+  exists (∅ ∪ hR). split.
+  - exists ∅, hR. repeat split; try done.
+    apply map_disjoint_empty_l.
+  - revert Hdisj. generalize hR. rewrite <- steps_frame_equiv.
+    apply step_once, head_step_step. by constructor.
+Qed.
+
+(* Alternative alloc triple, more similar to CISL paper *)
+Lemma ISL_Alloc_fresh v :
+  ISL emp (EAlloc (EVal v)) (fun x => ∃ l, @[x = VRef l] ∗ l ↦ v)%S.
+Proof.
+  eauto using ISL_exists_post, ISL_Alloc_val.
+Qed.
+
+(* This lemma shows that we can reuse previously freed locations *)
+Lemma ISL_Alloc_reuse l v :
+  ISL (l ↦ ⊥) (EAlloc (EVal v)) (fun x => @[x = VRef l] ∗ l ↦ v)%S.
+Proof.
+  intros R v0 h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
+  empty_left Hdisj.
+  exists ({[ l := Reserved ]} ∪ hR). split.
+  - exists {[ l := Reserved ]}, hR. repeat split; try done.
+    apply map_disjoint_spec. intros.
+    apply lookup_singleton_Some in H as []; simplify_eq.
+    assert (hR !! i = None). { solve_map_disjoint. } simplify_eq.
+  - revert Hdisj. generalize hR. rewrite <- steps_frame_equiv.
+    apply step_once, head_step_step.
+    rewrite <- (insert_singleton l Reserved (Value v)).
+    constructor. intros c Hc.
+    rewrite lookup_singleton in Hc. congruence.
+Qed.
+
+(* ELoad rules *)
+
+Lemma ISL_Load l v :
+  ISL (l ↦ v) (ELoad (EVal (VRef l))) (fun x => @[x = v] ∗ l ↦ v)%S.
+Proof.
+  intros R x h' (h'' & h2 & (h0 & h1 & [-> ->] & -> & -> & Hdisj') & H2 & -> & Hdisj).
+  empty_left Hdisj. exists ({[l := Value v]} ∪ h2).
+  split; [by exists {[l := Value v]}, h2 |].
+  apply step_once, head_step_step, Load_headstep.
+  apply lookup_union_Some_l, lookup_singleton.
+Qed.
+
+Lemma load_reserved_not_step h e' h' l :
+  {[l := Reserved]} ### h ->
+  ¬ step (ELoad (EVal (VRef l))) ({[l := Reserved]} ∪ h) e' h'.
+Proof.
+  intros Hdisj Hstep.
+  inv Hstep. inv H0.
+  - inv H1; [inv H|].
+    apply lookup_union_Some_inv_l in H0.
+    + rewrite lookup_singleton_Some in H0. easy.
+    + eapply map_disjoint_Some_l; [done|].
+      by rewrite lookup_singleton_Some.
+  - inv H2. apply (context_EVal _ _ _ H3) in H.
+    destruct H. simplify_eq.
+    inv H1. inv H.
+Qed.
+
+Lemma ISLERR_load l :
+  ISLERR (l ↦ ⊥) (ELoad (EVal (VRef l))) (l ↦ ⊥).
+Proof.
+  intros R h' (h1 & h2 & -> & H2 & -> & Hdisj).
+  exists (ELoad (EVal (VRef l))), ({[l := Reserved]} ∪ h2).
+  repeat split; [by exists {[l := Reserved]}, h2 | apply steps_refl | ].
+  apply unsafe_is_error. split;
+  auto using load_reserved_not_step.
+Qed.
+
+(* EStore rules *)
+
+Lemma ISL_Store l v w :
+  ISL (l ↦ v) (EStore (EVal (VRef l)) (EVal w)) (fun x => @[x = VUnit] ∗ (l ↦ w))%S.
+Proof.
+  intros R x h' (h1 & h2 & (h0 & hl & [-> ->] & -> & -> & Hdisj') & H2 & -> & Hdisj).
+  empty_left Hdisj.
+  exists ({[l := Value v]} ∪ h2). split.
+  - exists {[l := Value v]}, h2. repeat split; try done.
+    rewrite map_disjoint_singleton_l.
+    by rewrite map_disjoint_singleton_l in Hdisj.
+  - revert Hdisj. generalize h2. rewrite <- steps_frame_equiv.
+    rewrite <- (insert_singleton l (Value v) (Value w)).
+    eapply step_once, head_step_step, Store_headstep.
+    by rewrite lookup_singleton.
+Qed.
+
+Lemma store_reserved_not_step h e' h' l v :
+  {[l := Reserved]} ### h ->
+  ¬ step (EStore (EVal (VRef l)) (EVal v)) ({[l := Reserved]} ∪ h) e' h'.
+Proof.
+  intros Hdisj Hstep.
+  inv Hstep. inv H0.
+  - inv H1; [inv H|].
+    apply lookup_union_Some_inv_l in H5.
+    + rewrite lookup_singleton_Some in H5. easy.
+    + eapply map_disjoint_Some_l; [done|].
+      by rewrite lookup_singleton_Some.
+  - inv H2.
+    + apply (context_EVal _ _ _ H3) in H.
+      destruct H. simplify_eq.
+      inv H1. inv H.
+    + apply (context_EVal _ _ _ H3) in H0.
+      destruct H0. simplify_eq.
+      inv H1. inv H.
+Qed.
+
+Lemma ISLERR_store l v :
+  ISLERR (l ↦ ⊥) (EStore (EVal (VRef l)) (EVal v)) (l ↦ ⊥).
+Proof.
+  intros R h' (h0 & hR & -> & HR & -> & Hdisj).
+  exists (EStore (EVal (VRef l)) (EVal v)), ({[l := Reserved]} ∪ hR).
+  repeat split; [by exists {[l := Reserved]}, hR | apply steps_refl | ].
+  apply unsafe_is_error. split;
+  auto using store_reserved_not_step.
+Qed.
+
+(* EFree rules *)
+
+Lemma ISL_free l v :
+  ISL (l ↦ v) (EFree (EVal (VRef l))) (fun x => @[x = VUnit] ∗ l ↦ ⊥)%S.
+Proof.
+  intros R x h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
+  empty_left Hdisj.
+  exists ({[l := Value v]} ∪ hR). split.
+  - exists {[l := Value v]}, hR. repeat split; try done.
+    rewrite map_disjoint_singleton_l.
+    by rewrite map_disjoint_singleton_l in Hdisj.
+  - revert Hdisj. generalize hR. rewrite <- steps_frame_equiv.
+    rewrite <- (insert_singleton l (Value v) Reserved).
+    eapply step_once, head_step_step, Free_headstep.
+    by rewrite lookup_singleton.
+Qed.
+
+Lemma free_reserved_not_step h e' h' l :
+  {[l := Reserved]} ### h ->
+  ¬ step (EFree (EVal (VRef l))) ({[l := Reserved]} ∪ h) e' h'.
+Proof.
+  intros Hdisj Hstep.
+  inv Hstep. inv H0.
+  - inv H1; [inv H|].
+    apply lookup_union_Some_inv_l in H0.
+    + rewrite lookup_singleton_Some in H0. easy.
+    + eapply map_disjoint_Some_l; [done|].
+      by rewrite lookup_singleton_Some.
+  - inv H2.
+    apply (context_EVal _ _ _ H3) in H.
+    destruct H. simplify_eq.
+    inv H1. inv H.
+Qed.
+
+Lemma ISLERR_free l :
+  ISLERR (l ↦ ⊥) (EFree (EVal (VRef l))) (l ↦ ⊥).
+Proof.
+  intros R h' (h0 & hR & -> & HR & -> & Hdisj).
+  exists (EFree (EVal (VRef l))), ({[l := Reserved]} ∪ hR).
+  repeat split; [by exists {[l := Reserved]}, hR | apply steps_refl | ].
+  apply unsafe_is_error. split;
+  auto using free_reserved_not_step.
 Qed.
 
 (* EPar rules *)
@@ -851,13 +1145,25 @@ Proof.
   eauto using ISL_pure_step, ISL_val, pure_step.
 Qed.
 
+(* Different possibility in Correctness logic:
+  {P1} e1 {Q1} ->
+  {P2} e2 {Q2} ->
+  (forall v1 v2, Q1 v1 * Q2 v2 |- Q (VPair v1 v2)) ->
+  {P1 * P2} e1 || e2 {Q}.
+  
+  or:
+  {...}
+  ->
+  {P1 * P2} e1 || e2 {fun x => exists v1 v2, [x = VPair v1 v2] * Q1 v1 * Q2 v2}
+*)
+
 Lemma ISL_par (P1 P2 : iProp) (Q1 Q2 : val -> iProp) e1 e2 v1 v2 :
   ISL P1 e1 (fun v => @[ v = v1 ] ∗ Q1 v)%S ->
   ISL P2 e2 (fun v => @[ v = v2 ] ∗ Q2 v)%S ->
   ISL (P1 ∗ P2)%S (EPar e1 e2) (fun v => @[ v = VPair v1 v2 ] ∗ Q1 v1 ∗ Q2 v2)%S.
 Proof.
   intros H1 H2.
-  eapply ISL_context with (k := fun x => EPar x e2); [repeat constructor| |].
+  eapply ISL_context with (k := fun x => EPar x e2); [eauto with context| |].
   - by apply ISL_frame.
   - exists v1. simpl. eapply ISL_context; [repeat constructor| |].
     + by apply ISL_frame_left.
@@ -873,8 +1179,8 @@ Lemma ISL_par_err (P Q : iProp) (e1 e2 : expr) :
   ISLERR P (EPar e1 e2) Q.
 Proof.
   intros [H | H].
-  - apply ISLERR_context with (k := fun x => EPar x e2); [repeat constructor | done].
-  - apply ISLERR_context with (k := fun x => EPar e1 x); [repeat constructor | done].
+  - apply ISLERR_context with (k := fun x => EPar x e2); [eauto with context | done].
+  - apply ISLERR_context with (k := fun x => EPar e1 x); [eauto with context | done].
 Qed.
 
 Lemma ISL_par_l (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
@@ -884,8 +1190,9 @@ Lemma ISL_par_l (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
 Proof.
   intros HPR [v HRQ].
   eapply ISL_context with (k := fun x => EPar (ESeq x e2) e3); [|done|].
-  - apply Compose_ctx with (k1 := fun x => EPar x e3); repeat constructor.
-  - exists v. eapply ISL_pure_step_context with (k := fun x => EPar x e3); [|done|]; repeat constructor.
+  - apply Compose_ctx with (k1 := fun x => EPar x e3); eauto with context.
+  - exists v. eapply ISL_pure_step_context with (k := fun x => EPar x e3);
+    [eauto with context | done | constructor].
 Qed.
 
 Lemma ISL_par_l_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
@@ -895,10 +1202,11 @@ Lemma ISL_par_l_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
 Proof.
   intros HPR [v HRQ].
   eapply ISLERR_context_ISL with (k := fun x => EPar (ESeq x e2) e3).
-  - apply Compose_ctx with (k1 := fun x => EPar x e3); repeat constructor.
+  - apply Compose_ctx with (k1 := fun x => EPar x e3); eauto with context.
   - eapply ISL_cons; [apply iEntails_refl | | done].
     intros v'. apply iPure_elim. intros ->. apply iEntails_refl.
-  - eapply ISLERR_pure_step_context with (k := fun x => EPar x e3); [|done|]; repeat constructor.
+  - eapply ISLERR_pure_step_context with (k := fun x => EPar x e3);
+    [eauto with context | done | constructor].
 Qed.
 
 Lemma ISL_par_r (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
@@ -908,8 +1216,9 @@ Lemma ISL_par_r (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
 Proof.
   intros HPR [v HRQ].
   eapply ISL_context with (k := fun x => EPar e1 (ESeq x e3)); [|done|].
-  - apply Compose_ctx with (k1 := fun x => EPar e1 x); repeat constructor.
-  - exists v. eapply ISL_pure_step_context; [|done|]; repeat constructor.
+  - apply Compose_ctx with (k1 := fun x => EPar e1 x); eauto with context.
+  - exists v. eapply ISL_pure_step_context;
+    [eauto with context | done | constructor].
 Qed.
 
 Lemma ISL_par_r_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
@@ -919,69 +1228,23 @@ Lemma ISL_par_r_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
 Proof.
   intros HPR [v HRQ].
   eapply ISLERR_context_ISL with (k := fun x => EPar e1 (ESeq x e3)).
-  - apply Compose_ctx; repeat constructor.
+  - eauto with context.
   - eapply ISL_cons; [apply iEntails_refl | | done].
     intros v'. apply iPure_elim. intros ->. apply iEntails_refl.
   - eapply ISLERR_pure_step_context; [|done|]; repeat constructor.
 Qed.
 
-(* If rules *)
 
-Lemma ISL_if_true (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
-  ISL (R (VBool true)) e2 Q ->
-  ISL P (EIf e1 e2 e3) Q.
-Proof.
-  intros HPR HRQ.
-  eapply ISL_context with (k := fun x => EIf x e2 e3);
-  [repeat constructor | apply HPR | exists (VBool true)].
-  eapply ISL_cons.
-  3: { eapply ISL_pure_step; [apply HRQ | constructor]. }
-  - eapply iEntails_trans; [|by apply iSep_mono_l, iPure_intro].
-    apply iSep_emp_l.
-  - easy.
-Qed.
-
-Lemma ISL_if_false (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
-  ISL (R (VBool false)) e3 Q ->
-  ISL P (EIf e1 e2 e3) Q.
-Proof.
-  intros HPR HRQ.
-  eapply ISL_context with (k := fun x => EIf x e2 e3);
-  [repeat constructor | apply HPR | exists (VBool false)].
-  eapply ISL_cons.
-  3: { eapply ISL_pure_step; [apply HRQ | constructor]. }
-  - eapply iEntails_trans; [|by apply iSep_mono_l, iPure_intro].
-    apply iSep_emp_l.
-  - easy.
-Qed.
-
-Lemma ISLERR_if (P Q : iProp) e1 e2 e3 :
-  ISLERR P e1 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
-Proof.
-  intros HPQ.
-  eapply ISLERR_context with (k := fun x => EIf x e2 e3);
-  [repeat constructor | done].
-Qed.
-
-Lemma ISLERR_if_true (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
-  ISLERR (R (VBool true)) e2 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
-Proof.
-  intros HPR HRQ.
-  eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3); [repeat constructor | done |].
-  eapply ISLERR_pure_step; [done | constructor].
-Qed.
-
-Lemma ISLERR_if_false (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
-  ISLERR (R (VBool false)) e3 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
-Proof.
-  intros HPR HRQ.
-  eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3); [repeat constructor | done |].
-  eapply ISLERR_pure_step; [done | constructor].
-Qed.
+(*
+  1) Alloc, Load, Store, Free --> DONE
+  2) Examples with Par rules
+  3) Use proofmode.v for Iris tactics
+  4) Write down in paper
+    -> Operational semantics
+    -> Contexts using K ::= O | load K | ..., same order as operational semantics
+    -> Unsafe
+    -> Triple definitions
+    -> Rules
+    -> Example (also after operational semantics, then show how to prove it unsafe here)
+  5) CISL RD/DD
+*)
