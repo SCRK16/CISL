@@ -7,6 +7,13 @@ Tactic Notation "inv" ident(H) "as" simple_intropattern(ipat) :=
 Tactic Notation "inv" ident(H) :=
   inversion H; clear H; simplify_eq.
 
+Inductive bin_op :=
+  | PlusOp
+  | MinusOp
+  | LeOp
+  | LtOp
+  | EqOp.
+
 Inductive val :=
   | VUnit : val
   | VBool : bool -> val
@@ -21,6 +28,7 @@ Inductive expr :=
   | EFst : expr -> expr
   | ESnd : expr -> expr
   | ELet : string -> expr -> expr -> expr
+  | EOp : bin_op -> expr -> expr -> expr
   | EIf : expr -> expr -> expr -> expr
   | ESeq : expr -> expr -> expr
   | EAlloc : expr -> expr
@@ -39,6 +47,7 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   | ELet y e1 e2 => if string_dec x y
      then ELet y (subst x w e1) e2
      else ELet y (subst x w e1) (subst x w e2)
+  | EOp op e1 e2 => EOp op (subst x w e1) (subst x w e2)
   | EIf e1 e2 e3 => EIf (subst x w e1) (subst x w e2) (subst x w e3)
   | ESeq e1 e2 => ESeq (subst x w e1) (subst x w e2)
   | EAlloc e' => EAlloc (subst x w e')
@@ -46,6 +55,31 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   | EStore e1 e2 => EStore (subst x w e1) (subst x w e2)
   | EFree e' => EFree (subst x w e')
   | EPar e1 e2 => EPar (subst x w e1) (subst x w e2)
+  end.
+
+Definition option_and (v1 v2 : option val) : option val :=
+  match v1 with
+  | Some (VBool b1) =>
+      match v2 with
+      | Some (VBool b2) => Some (VBool (andb b1 b2))
+      | _ => None
+      end
+  | _ => None
+  end.
+
+Fixpoint eval_bin_op (op : bin_op) (v1 v2 : val) : option val :=
+  match op, v1, v2 with
+  | PlusOp, VNat n1, VNat n2 => Some (VNat (n1 + n2))
+  | MinusOp, VNat n1, VNat n2 => Some (VNat (n1 - n2))
+  | LeOp, VNat n1, VNat n2 => Some (VBool (Nat.leb n1 n2))
+  | LtOp, VNat n1, VNat n2 => Some (VBool (Nat.ltb n1 n2))
+  | EqOp, VUnit, VUnit => Some (VBool true)
+  | EqOp, VBool n1, VBool n2 => Some (VBool (Bool.eqb n1 n2))
+  | EqOp, VNat n1, VNat n2 => Some (VBool (Nat.eqb n1 n2))
+  | EqOp, VRef l1, VRef l2 => Some (VBool (Nat.eqb l1 l2))
+  | EqOp, VPair p1 p2, VPair q1 q2 =>
+      option_and (eval_bin_op EqOp p1 q1) (eval_bin_op EqOp p2 q2)
+  | _, _, _ => None
   end.
 
 (* Small steps that don't alter the heap *)
@@ -58,6 +92,9 @@ Inductive pure_step : expr -> expr -> Prop :=
       pure_step (ESnd (EPair e1 e2)) e2
   | Let_step y e v :
       pure_step (ELet y (EVal v) e) (subst y v e)
+  | Op_step op v1 v2 v3 :
+      eval_bin_op op v1 v2 = Some v3 ->
+      pure_step (EOp op (EVal v1) (EVal v2)) (EVal v3)
   | If_true_step e1 e2 :
       pure_step (EIf (EVal (VBool true)) e1 e2) e1
   | If_false_step e1 e2 :
@@ -101,6 +138,8 @@ Inductive ctx1 : (expr -> expr) -> Prop :=
   | Fst_ctx : ctx1 EFst
   | Snd_ctx : ctx1 ESnd
   | Let_ctx y e : ctx1 (fun x => ELet y x e)
+  | Op_l_ctx op e : ctx1 (fun x => EOp op x e)
+  | Op_r_ctx op v : ctx1 (fun x => EOp op (EVal v) x)
   | If_ctx e1 e2 : ctx1 (fun x => EIf x e1 e2)
   | Seq_ctx e : ctx1 (fun x => ESeq x e)
   | Alloc_ctx : ctx1 EAlloc
@@ -596,8 +635,6 @@ Proof.
   by apply ILERR_context.
 Qed.
 
-(* ISLERR_context_ISL met exists ipv @[x = v] *)
-
 Lemma ISLERR_context_ISL (P Q : iProp) (R : val -> iProp) e v k :
   ctx k ->
   ISL P e (fun x => @[x = v] ∗ R x)%S ->
@@ -688,6 +725,27 @@ Proof.
   intros v. simpl. apply iSep_assoc'.
 Qed.
 
+Lemma ISL_sep_assoc_pre (P1 P2 P3 : iProp) (Q : val -> iProp) e :
+  ISL (P1 ∗ P2 ∗ P3) e Q ->
+  ISL ((P1 ∗ P2) ∗ P3) e Q.
+Proof.
+  intros H. eapply ISL_cons;
+  [| intros v; apply iEntails_refl | done].
+  apply iSep_assoc.
+Qed.
+
+(* Alternative ISLERR_context_ISL rule *)
+Lemma ISLERR_context_ISL_exists (P Q : iProp) (R : val -> iProp) e k :
+  ctx k ->
+  ISL P e R ->
+  (exists v, ISLERR (R v) (k (EVal v)) Q) ->
+  ISLERR P (k e) Q.
+Proof.
+  intros Hctx HPR [v HRQ].
+  eapply ISLERR_context_ISL; [done |  | done].
+  eapply ISL_cons; eauto using iPure_elim, iEntails_refl.
+Qed.
+
 (* Frame rules *)
 
 Lemma ISL_frame (R P : iProp) (Q : val -> iProp) e :
@@ -700,8 +758,18 @@ Proof.
   exists h. split; by [apply iSep_assoc |].
 Qed.
 
+Lemma ISL_frame' (R : iProp) (Q : val -> iProp) e :
+  ISL emp e Q -> ISL R e (fun x => Q x ∗ R)%S.
+Proof.
+  intros H.
+  eapply ISL_cons.
+  3: { eapply ISL_frame with (R := R), H. }
+  - apply iSep_emp_l_inv.
+  - eauto using iEntails_refl.
+Qed.
+
 Lemma ISL_frame_left (R P : iProp) (Q : val -> iProp) e :
-  ISL P e Q -> ISL (R ∗ P)%S e (fun x => R ∗ Q x)%S.
+  ISL P e Q -> ISL (R ∗ P) e (fun x => R ∗ Q x)%S.
 Proof.
   intros HPQ.
   apply (ISL_cons _ (P ∗ R) _ (fun x => Q x ∗ R)%S).
@@ -711,12 +779,22 @@ Proof.
 Qed.
 
 Lemma ISLERR_frame (R P Q : iProp) e :
-  ISLERR P e Q -> ISLERR (P ∗ R)%S e (Q ∗ R)%S.
+  ISLERR P e Q -> ISLERR (P ∗ R) e (Q ∗ R).
 Proof.
   intros HPQ T.
   specialize (HPQ (R ∗ T)%S).
   eapply ILERR_cons; [ | | done]; eauto with seplogic.
 Qed.
+
+Lemma ISLERR_frame_left (R P Q : iProp) e :
+  ISLERR P e Q -> ISLERR (R ∗ P) e (R ∗ Q).
+Proof.
+  intros HPQ.
+  apply (ISLERR_cons _ (P ∗ R) _ (Q ∗ R)).
+  - apply iSep_comm.
+  - intros v. apply iSep_comm.
+  - by apply ISLERR_frame.
+Qed. 
 
 (* Step rules *)
 
@@ -895,6 +973,46 @@ Proof.
   - eapply ISLERR_pure_step; [done | constructor].
 Qed.
 
+(* EOp rules *)
+
+Lemma ISL_op op v1 v2 v3 :
+  eval_bin_op op v1 v2 = Some v3 ->
+  ISL emp (EOp op (EVal v1) (EVal v2)) (fun x => @[x = v3])%S.
+Proof.
+  intros Hbin. eapply ISL_pure_step.
+  - apply ISL_val.
+  - by constructor.
+Qed.
+
+Ltac val_not_step k e := repeat
+  match goal with
+  | H : k e = EVal _ |- _ => apply context_EVal in H; [|assumption]
+  | H : _ = _ /\ _ = _ |- _ => destruct H as [-> ->]
+  | H : head_step (EVal _) _ _ _ |- _ => inv H
+  | H : pure_step (EVal _) _ |- _ => inv H
+  end.
+
+Lemma op_none_not_step op v1 v2 h e' h' :
+  eval_bin_op op v1 v2 = None ->
+  ¬ step (EOp op (EVal v1) (EVal v2)) h e' h'.
+Proof.
+  intros Hbin Hstep.
+  inv Hstep. inv H0.
+  - inv H1. inv H.
+  - inv H2; val_not_step k2 e.
+Qed.
+
+Lemma ISLERR_op op v1 v2 :
+  eval_bin_op op v1 v2 = None ->
+  ISLERR emp (EOp op (EVal v1) (EVal v2)) emp.
+Proof.
+  intros Hbin R h H.
+  eexists _, h. repeat split; [done | apply steps_refl |].
+  apply unsafe_is_error. split; [easy|].
+  intros e' h'.
+  by apply op_none_not_step.
+Qed.
+
 (* EIf rules *)
 
 Lemma ISL_if_true (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
@@ -1023,9 +1141,7 @@ Proof.
     + rewrite lookup_singleton_Some in H0. easy.
     + eapply map_disjoint_Some_l; [done|].
       by rewrite lookup_singleton_Some.
-  - inv H2. apply (context_EVal _ _ _ H3) in H.
-    destruct H. simplify_eq.
-    inv H1. inv H.
+  - inv H2. val_not_step k2 e.
 Qed.
 
 Lemma ISLERR_load l :
@@ -1066,13 +1182,7 @@ Proof.
     + rewrite lookup_singleton_Some in H5. easy.
     + eapply map_disjoint_Some_l; [done|].
       by rewrite lookup_singleton_Some.
-  - inv H2.
-    + apply (context_EVal _ _ _ H3) in H.
-      destruct H. simplify_eq.
-      inv H1. inv H.
-    + apply (context_EVal _ _ _ H3) in H0.
-      destruct H0. simplify_eq.
-      inv H1. inv H.
+  - inv H2; val_not_step k2 e.
 Qed.
 
 Lemma ISLERR_store l v :
@@ -1113,10 +1223,7 @@ Proof.
     + rewrite lookup_singleton_Some in H0. easy.
     + eapply map_disjoint_Some_l; [done|].
       by rewrite lookup_singleton_Some.
-  - inv H2.
-    apply (context_EVal _ _ _ H3) in H.
-    destruct H. simplify_eq.
-    inv H1. inv H.
+  - inv H2. val_not_step k2 e.
 Qed.
 
 Lemma ISLERR_free l :
@@ -1234,6 +1341,198 @@ Proof.
   - eapply ISLERR_pure_step_context; [|done|]; repeat constructor.
 Qed.
 
+Lemma pair_steps_par_steps e1 e2 v h h' :
+  steps (EPair e1 e2) h (EVal v) h' ->
+  steps (EPar e1 e2) h (EVal v) h'.
+Proof.
+  intros Hsteps.
+  remember (EPair e1 e2) as e.
+  revert Heqe. revert e1 e2.
+  remember (EVal v) as v'.
+  induction Hsteps; intros e' e'' Heq; simplify_eq.
+  assert (EVal v = EVal v) by reflexivity.
+  specialize (IHHsteps H0). clear H0.
+  inv H. inv H1.
+  - inv H2. inv H. inv Hsteps.
+    + eauto with headstep.
+    + inv H. val_not_step k e.
+  - inv H.
+    + eapply steps_step.
+      * eapply do_step with (k := fun x => EPar (k2 x) e''); [|done].
+        apply Compose_ctx with (k1 := fun x => EPar x e'');
+        eauto with context.
+      * by apply IHHsteps.
+    + eapply steps_step.
+      * eapply do_step with (k := fun x => EPar _ (k2 x));
+        eauto with context.
+      * by apply IHHsteps.
+Qed.
+
+Lemma ISL_par_pair (P : iProp) (Q : val -> iProp) e1 e2 :
+  ISL P (EPair e1 e2) Q ->
+  ISL P (EPar e1 e2) Q.
+Proof.
+  intros HPair R v h' HQR.
+  destruct (HPair R v h' HQR) as (h & HPR & Hsteps).
+  exists h. split; [done|].
+  by apply pair_steps_par_steps.
+Qed.
+
+Lemma par_steps_mirror e1 e2 v1 v2 h h' :
+  steps (EPar e1 e2) h (EVal (VPair v1 v2)) h' ->
+  steps (EPar e2 e1) h (EVal (VPair v2 v1)) h'.
+Proof.
+  intros Hsteps.
+  remember (EPar e1 e2) as e.
+  remember (EVal (VPair v1 v2)) as v.
+  revert Heqe. revert e1 e2.
+  induction Hsteps; intros e' e'' Heqe; simplify_eq.
+  assert (EVal (VPair v1 v2) = EVal (VPair v1 v2)) by reflexivity.
+  specialize (IHHsteps H0). clear H0.
+  inv H. inv H1.
+  - inv H2. inv H. inv Hsteps.
+    + eauto with headstep.
+    + inv H. val_not_step k e.
+  - inv H.
+    + eapply steps_step.
+      * apply do_step with (k := fun x => EPar e'' (k2 x)); [|done].
+        apply Compose_ctx with (k1 := fun x => EPar e'' x);
+        eauto with context.
+      * by apply IHHsteps.
+    + eapply steps_step.
+      * apply do_step with (k := fun x => EPar (k2 x) e'); [|done].
+        apply Compose_ctx with (k1 := fun x => EPar x e');
+        eauto with context.
+      * by apply IHHsteps.
+Qed.
+
+Lemma ISL_par_mirror (P : iProp) (Q : val -> iProp) e1 e2 v1 v2 :
+  ISL P (EPar e1 e2) (fun x => @[x = VPair v1 v2] ∗ Q (VPair v1 v2))%S ->
+  ISL P (EPar e2 e1) (fun x => @[x = VPair v2 v1] ∗ Q (VPair v1 v2))%S.
+Proof.
+  intros HPair R v h' (h'' & hR & (h1 & h2 & [-> ->] & HQ & -> & Hdisj') & HR & Heq & Hdisj).
+  destruct (HPair R (VPair v1 v2) h') as (h & HPR & Hsteps); simplify_eq.
+  2: {
+    exists h. split; [done|].
+    by apply par_steps_mirror.
+  }
+  exists (∅ ∪ h2), hR. repeat split; try done.
+  by exists ∅, h2.
+Qed.
+
+(* Examples *)
+
+Definition Ex_mem : expr :=
+  ELet "x" (EAlloc (EVal (VNat 0))) (
+    ELet "z" (EAlloc (EVal (VNat 0))) (
+      EPar (
+        ESeq (EFree (EVar "x")) (EStore (EVar "z") (EVal (VNat 1)))
+      ) (
+        ELet "a" (ELoad (EVar "z")) (
+          EIf (EOp EqOp (EVar "a") (EVal (VNat 1))) (
+            EStore (EVar "x") (EVal (VNat 1))
+          ) (
+            EVal VUnit
+          )
+        )
+      )
+    )
+  ).
+
+Ltac ISL_pure_true := eapply ISL_cons;
+  [eauto using iPure_intro' | intros v; apply iEntails_refl |].
+
+Ltac ISLERR_pure_true := eapply ISLERR_cons;
+  [eauto using iPure_intro' | intros v; apply iEntails_refl |].
+
+Example correct_execution lx lz :
+  ISL emp Ex_mem (fun x => @[x = VPair VUnit VUnit] ∗ lz ↦ VNat 1 ∗ lx ↦ ⊥)%S.
+Proof.
+  unfold Ex_mem.
+  eapply ISL_context with (k := fun x => ELet _ x _);
+  [eauto with context | apply ISL_Alloc_val | simpl].
+  exists (VRef lx). ISL_pure_true.
+  eapply ISL_pure_step; [|constructor]. simpl.
+  eapply ISL_context with (k := fun x => ELet _ x _);
+  [eauto with context |..]. {
+    eapply ISL_cons;
+    [apply iSep_emp_l_inv | intros v; apply iEntails_refl |].
+    apply ISL_frame, ISL_Alloc_val.
+  } simpl.
+  exists (VRef lz). apply ISL_sep_assoc_pre. ISL_pure_true.
+  eapply ISL_pure_step; [|constructor]. simpl.
+  apply ISL_par_mirror with (Q := fun _ => (lz ↦ VNat 1 ∗ lx ↦ ⊥)%S).
+  apply ISL_par_pair.
+  eapply ISL_context with (k := fun x => EPair x _);
+  [eauto with context | |].
+  - eapply ISL_context with (k := fun x => ELet _ x _);
+    [eauto with context | |].
+    + eapply ISL_frame, ISL_Load.
+    + simpl. exists (VNat 0). ISL_pure_true.
+      { eapply iEntails_trans; [apply iPure_intro' | apply iSep_assoc]; done. }
+      eapply ISL_pure_step; [|constructor]. simpl.
+      eapply ISL_context with (k := fun x => EIf x _ _);
+      [eauto with context | |].
+      * eapply ISL_pure_step.
+        -- apply ISL_frame', ISL_val.
+        -- constructor. constructor.
+      * simpl. exists (VBool false). ISL_pure_true.
+        eapply ISL_pure_step; [|constructor].
+        eapply ISL_frame', ISL_val.
+  - simpl. exists VUnit. ISL_pure_true.
+    eapply ISL_context with (k := fun x => EPair (EVal VUnit) x);
+    [eauto with context | |].
+    + eapply ISL_context with (k := fun x => ESeq x _);
+      [eauto with context | |].
+      * apply ISL_frame_left. apply ISL_free.
+      * simpl. exists VUnit. ISL_pure_true.
+        -- eapply iEntails_trans; [|apply iSep_comm].
+           eapply iEntails_trans; [|apply iSep_assoc].
+           by apply iPure_intro'.
+        -- eapply ISL_pure_step; [|constructor].
+           eapply ISL_frame_left, ISL_Store.
+    + simpl. exists VUnit. ISL_pure_true.
+      * eapply iEntails_trans; [|apply iSep_comm].
+        eapply iEntails_trans; [|apply iSep_assoc].
+        by apply iPure_intro'.
+      * eapply ISL_pure_step; [|constructor].
+        eapply ISL_frame', ISL_val.
+Qed.
+
+Example erroneous_execution lx lz :
+  ISLERR emp Ex_mem (lz ↦ VNat 1 ∗ lx ↦ ⊥)%S.
+Proof.
+  unfold Ex_mem.
+  eapply ISLERR_context_ISL_exists with (k := fun x => ELet _ x _);
+  [eauto with context | apply ISL_Alloc_val | simpl].
+  exists (VRef lx). ISLERR_pure_true. 
+  eapply ISLERR_pure_step; [|constructor]. simpl.
+  eapply ISLERR_context_ISL_exists with (k := fun x => ELet _ x _);
+  [eauto with context | eapply ISL_frame', ISL_Alloc_val |].
+  exists (VRef lz). ISLERR_pure_true.
+  { eapply iEntails_trans; [| apply iSep_assoc]. by apply iPure_intro'. }
+  eapply ISLERR_pure_step; [|constructor]. simpl.
+  eapply ISL_par_l_err; [apply ISL_frame_left, ISL_free|].
+  exists VUnit. ISLERR_pure_true; [by apply iSep_mono_r, iPure_intro'|].
+  eapply ISLERR_context_ISL with
+    (k := fun x => EPar x _);
+  [eauto with context | apply ISL_sep_assoc_post, ISL_frame, ISL_Store |].
+  apply ISL_par_err. right.
+  eapply ISLERR_context_ISL with (k := fun x => ELet _ x _);
+  [eauto with context | apply ISL_sep_assoc_post, ISL_frame, ISL_Load |].
+  eapply ISLERR_pure_step; [|constructor]. simpl.
+  eapply ISLERR_if_true with (R := (fun x => lz ↦ VNat 1 ∗ lx ↦ ⊥)%S).
+  - eapply ISL_frame', ISL_pure_step; [|by constructor].
+    apply ISL_val.
+  - apply ISLERR_frame_left, ISLERR_store.
+Qed.
+
+Definition Ex_race (n : nat) : expr :=
+  ELet "x" (EAlloc (EVal (VNat n))) (
+    EPar
+      (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
+      (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
+  ).
 
 (*
   1) Alloc, Load, Store, Free --> DONE
