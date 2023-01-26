@@ -570,7 +570,14 @@ Definition ISL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
 Definition ISLERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
   forall R, ILERR (P ∗ R)%S e (Q ∗ R)%S.
 
-Lemma ISL_val (v : val) : ISL emp (EVal v) (fun x => @[ x = v ])%S.
+Notation "[[[ P ]]] e [[[ v , Q ]]]" := (ISL P%S e (λ v , Q%S))
+    (at level 20, e, P at level 200, Q at level 200, only parsing).
+Notation "[[[ P ]]] e [[[ Q ]]]" := (ISL P%S e Q%S)
+    (at level 20, e, P at level 200, Q at level 200, only parsing).
+Notation "[[[ P ]]] e [[[ERR: Q ]]]" := (ISLERR P%S e Q%S)
+  (at level 20, e, P at level 200, Q at level 200, only parsing).
+
+Lemma ISL_val (v : val) : [[[ emp ]]] EVal v [[[ x, @[ x = v] ]]].
 Proof.
   intros R v' h' HP.
   exists h'. inversion HP. destruct H as (h2 & [-> ->] & HR & -> & Hx).
@@ -596,9 +603,9 @@ Qed.
 
 Lemma ISL_context_all (P : iProp) (Q R : val -> iProp) e k :
   ctx k ->
-  ISL P e Q ->
-  (forall v, ISL (Q v) (k (EVal v)) R) ->
-  ISL P (k e) R.
+  [[[ P ]]] e [[[ Q ]]] ->
+  (forall v, [[[ Q v ]]] k (EVal v) [[[ R ]]]) ->
+  [[[ P ]]] k e [[[ R ]]].
 Proof.
   intros Hk HPeQ HQkR W.
   eapply IL_context_all; try done.
@@ -621,9 +628,9 @@ Qed.
 
 Lemma ISL_context (P : iProp) (Q R : val -> iProp) e k :
   ctx k ->
-  ISL P e Q ->
-  (exists v, ISL (Q v) (k (EVal v)) R) ->
-  ISL P (k e) R.
+  [[[ P ]]] e [[[ Q ]]] ->
+  (exists v, [[[ Q v ]]] k (EVal v) [[[ R ]]]) ->
+  [[[ P ]]] k e [[[ R ]]].
 Proof.
   intros Hk HPeQ HQkR W.
   eapply IL_context; try done.
@@ -645,8 +652,8 @@ Qed.
 
 Lemma ISLERR_context (P Q : iProp) e k :
   ctx k ->
-  ISLERR P e Q ->
-  ISLERR P (k e) Q.
+  [[[ P ]]] e [[[ERR: Q ]]] ->
+  [[[ P ]]] (k e) [[[ERR: Q ]]].
 Proof.
   intros Hctx H R.
   by apply ILERR_context.
@@ -654,9 +661,9 @@ Qed.
 
 Lemma ISLERR_context_ISL (P Q : iProp) (R : val -> iProp) e v k :
   ctx k ->
-  ISL P e (fun x => @[x = v] ∗ R x)%S ->
-  ISLERR (R v) (k (EVal v)) Q ->
-  ISLERR P (k e) Q.
+  [[[ P ]]] e [[[ x, @[x = v] ∗ R x]]] ->
+  [[[ R v ]]] k (EVal v) [[[ERR: Q ]]] ->
+  [[[ P ]]] k e [[[ERR: Q ]]].
 Proof.
   intros Hctx HPR HRQ W h' HQ.
   destruct (HRQ W h' HQ) as (e' & h & Hh & Hsteps & Herr).
@@ -689,14 +696,14 @@ Qed.
 Lemma ISL_cons (P P' : iProp) (Q Q' : val -> iProp) e :
   (P' ⊢ P)%S ->
   (forall v, (Q v  ⊢ Q' v)%S) ->
-  ISL P' e Q' ->
-  ISL P e Q.
+  [[[ P' ]]] e [[[ Q' ]]] ->
+  [[[ P ]]] e [[[ Q ]]].
 Proof.
   intros HP HQ H' R. specialize (H' R).
   eapply IL_cons; [| intros v | done]; simpl; eauto with seplogic.
 Qed.
 
-Lemma ISL_IL P e Q : ISL P e Q -> IL P e Q.
+Lemma ISL_IL P e Q : [[[ P ]]] e [[[ Q ]]] -> IL P e Q.
 Proof.
   intros H.
   specialize (H (emp)%S).
@@ -717,16 +724,16 @@ Qed.
 Lemma ISLERR_cons (P P' Q Q' : iProp) e :
   (P' ⊢ P)%S ->
   (Q ⊢ Q')%S ->
-  ISLERR P' e Q' ->
-  ISLERR P e Q.
+  [[[ P' ]]] e [[[ERR: Q' ]]] ->
+  [[[ P ]]] e [[[ERR: Q ]]].
 Proof.
   intros ????.
   eauto using ILERR_cons, iSep_mono_l.
 Qed.
 
 Lemma ISL_sep_assoc_post (P Q2 Q3 : iProp) (Q1 : val -> iProp) e :
-  ISL P e (fun x => (Q1 x ∗ Q2) ∗ Q3)%S ->
-  ISL P e (fun x => Q1 x ∗ Q2 ∗ Q3)%S.
+  [[[ P ]]] e [[[ x, (Q1 x ∗ Q2) ∗ Q3 ]]] ->
+  [[[ P ]]] e [[[ x, Q1 x ∗ Q2 ∗ Q3 ]]].
 Proof.
   intros HISL.
   eapply ISL_cons; [apply iEntails_refl | |done].
@@ -734,8 +741,8 @@ Proof.
 Qed.
 
 Lemma ISL_sep_assoc'_post (P Q2 Q3 : iProp) (Q1 : val -> iProp) e :
-  ISL P e (fun x => Q1 x ∗ Q2 ∗ Q3)%S ->
-  ISL P e (fun x => (Q1 x ∗ Q2) ∗ Q3)%S.
+  [[[ P ]]] e [[[ x, Q1 x ∗ Q2 ∗ Q3 ]]] ->
+  [[[ P ]]] e [[[ x, (Q1 x ∗ Q2) ∗ Q3 ]]].
 Proof.
   intros HISL.
   eapply ISL_cons; [apply iEntails_refl | |done].
@@ -743,8 +750,8 @@ Proof.
 Qed.
 
 Lemma ISL_sep_assoc_pre (P1 P2 P3 : iProp) (Q : val -> iProp) e :
-  ISL (P1 ∗ P2 ∗ P3) e Q ->
-  ISL ((P1 ∗ P2) ∗ P3) e Q.
+  [[[ P1 ∗ P2 ∗ P3 ]]] e [[[ Q ]]] ->
+  [[[ (P1 ∗ P2) ∗ P3 ]]] e [[[ Q ]]].
 Proof.
   intros H. eapply ISL_cons;
   [| intros v; apply iEntails_refl | done].
@@ -754,9 +761,9 @@ Qed.
 (* Alternative ISLERR_context_ISL rule *)
 Lemma ISLERR_context_ISL_exists (P Q : iProp) (R : val -> iProp) e k :
   ctx k ->
-  ISL P e R ->
-  (exists v, ISLERR (R v) (k (EVal v)) Q) ->
-  ISLERR P (k e) Q.
+  [[[ P ]]] e [[[ R ]]] ->
+  (exists v, [[[ R v ]]] k (EVal v) [[[ERR: Q ]]]) ->
+  [[[ P ]]] k e [[[ERR: Q ]]].
 Proof.
   intros Hctx HPR [v HRQ].
   eapply ISLERR_context_ISL; [done |  | done].
@@ -766,7 +773,8 @@ Qed.
 (* Frame rules *)
 
 Lemma ISL_frame (R P : iProp) (Q : val -> iProp) e :
-  ISL P e Q -> ISL (P ∗ R)%S e (fun x => Q x ∗ R)%S.
+  [[[ P ]]] e [[[ Q ]]] ->
+  [[[ P ∗ R ]]] e [[[ x, Q x ∗ R ]]].
 Proof.
   intros HPQ T v h' HQRT.
   apply iSep_assoc' in HQRT.
@@ -776,7 +784,8 @@ Proof.
 Qed.
 
 Lemma ISL_frame' (R : iProp) (Q : val -> iProp) e :
-  ISL emp e Q -> ISL R e (fun x => Q x ∗ R)%S.
+  [[[ emp ]]] e [[[ Q ]]] ->
+  [[[ R ]]] e [[[ x, Q x ∗ R ]]].
 Proof.
   intros H.
   eapply ISL_cons.
@@ -786,7 +795,8 @@ Proof.
 Qed.
 
 Lemma ISL_frame_left (R P : iProp) (Q : val -> iProp) e :
-  ISL P e Q -> ISL (R ∗ P) e (fun x => R ∗ Q x)%S.
+  [[[ P ]]] e [[[ Q ]]] ->
+  [[[ R ∗ P ]]] e [[[ x, R ∗ Q x ]]].
 Proof.
   intros HPQ.
   apply (ISL_cons _ (P ∗ R) _ (fun x => Q x ∗ R)%S).
@@ -796,7 +806,8 @@ Proof.
 Qed.
 
 Lemma ISLERR_frame (R P Q : iProp) e :
-  ISLERR P e Q -> ISLERR (P ∗ R) e (Q ∗ R).
+  [[[ P ]]] e [[[ERR: Q ]]] ->
+  [[[ P ∗ R ]]] e [[[ERR: Q ∗ R ]]].
 Proof.
   intros HPQ T.
   specialize (HPQ (R ∗ T)%S).
@@ -804,7 +815,8 @@ Proof.
 Qed.
 
 Lemma ISLERR_frame_left (R P Q : iProp) e :
-  ISLERR P e Q -> ISLERR (R ∗ P) e (R ∗ Q).
+  [[[ P ]]] e [[[ERR: Q ]]] ->
+  [[[ R ∗ P ]]] e [[[ERR: R ∗ Q ]]].
 Proof.
   intros HPQ.
   apply (ISLERR_cons _ (P ∗ R) _ (Q ∗ R)).
@@ -816,9 +828,9 @@ Qed.
 (* Step rules *)
 
 Lemma ISL_pure_step (P : iProp) (Q : val -> iProp) e e' :
-  ISL P e' Q ->
+  [[[ P ]]] e' [[[ Q ]]] ->
   pure_step e e' ->
-  ISL P e Q.
+  [[[ P ]]] e [[[ Q ]]].
 Proof.
   intros HPQ Hstep W v h Hh.
   destruct (HPQ W v h Hh) as (h' & Hh' & Hsteps).
@@ -829,9 +841,9 @@ Qed.
 
 Lemma ISL_pure_step_context (P : iProp) (Q : val -> iProp) e e' k :
   ctx k ->
-  ISL P (k e') Q ->
+  [[[ P ]]] k e' [[[ Q ]]] ->
   pure_step e e' ->
-  ISL P (k e) Q.
+  [[[ P ]]] k e [[[ Q ]]].
 Proof.
   intros Hctx HPQ Hstep W v h Hh.
   destruct (HPQ W v h Hh) as (h' & Hh' & Hsteps).
@@ -841,9 +853,9 @@ Proof.
 Qed.
 
 Lemma ISLERR_pure_step (P Q : iProp) e e' :
-  ISLERR P e' Q ->
+  [[[ P ]]] e' [[[ERR: Q ]]] ->
   pure_step e e' ->
-  ISLERR P e Q.
+  [[[ P ]]] e [[[ERR: Q ]]].
 Proof.
   intros HPQ Hstep W h Hh.
   destruct (HPQ W h Hh) as (e0 & h0 & Hh0 & Hsteps & Herr).
@@ -854,9 +866,9 @@ Qed.
 
 Lemma ISLERR_pure_step_context (P Q : iProp) e e' k :
   ctx k ->
-  ISLERR P (k e') Q ->
+  [[[ P ]]] k e' [[[ERR: Q ]]] ->
   pure_step e e' ->
-  ISLERR P (k e) Q.
+  [[[ P ]]] k e [[[ERR: Q ]]].
 Proof.
   intros Hctx HPQ Hstep W h Hh.
   destruct (HPQ W h Hh) as (e0 & h0 & Hh0 & Hsteps & Herr).
@@ -867,8 +879,8 @@ Qed.
 
 (* Quantifier rules *)
 Lemma ISL_exists_post {A} (P : iProp) (Q : A -> val -> iProp) e :
-  (forall s, ISL P e (Q s)) ->
-  ISL P e (fun x => ∃ s, Q s x)%S.
+  (forall s, [[[ P ]]] e [[[ Q s ]]]) ->
+  [[[ P ]]] e [[[ x, ∃ s, Q s x ]]].
 Proof.
   intros H R v h' (h1 & h2 & [s Hs] & H2 & -> & Hdisj).
   apply (H s R v). by exists h1, h2.
@@ -889,9 +901,9 @@ Proof.
 Qed.
 
 Lemma ISL_disj (P P' : iProp) (Q Q' : val -> iProp) e :
-  ISL P e Q ->
-  ISL P' e Q' ->
-  ISL (P ∨ P')%S e (fun x => Q x ∨ Q' x)%S.
+  [[[ P ]]] e [[[ Q ]]] ->
+  [[[ P' ]]] e [[[ Q' ]]] ->
+  [[[ P ∨ P' ]]] e [[[ x, Q x ∨ Q' x ]]].
 Proof.
   intros H H' R.
   eapply IL_cons.
@@ -912,9 +924,9 @@ Proof.
 Qed.
 
 Lemma ISLERR_disj (P P' Q Q' : iProp) e :
-  ISLERR P e Q ->
-  ISLERR P' e Q' ->
-  ISLERR (P ∨ P')%S e (Q ∨ Q')%S.
+  [[[ P ]]] e [[[ERR: Q ]]] ->
+  [[[ P' ]]] e [[[ERR: Q' ]]] ->
+  [[[ P ∨ P' ]]] e [[[ERR: Q ∨ Q' ]]].
 Proof.
   intros H H' R.
   eapply ILERR_cons; eauto using iOr_distr, iOr_distr'.
@@ -924,7 +936,8 @@ Qed.
 (* Pure rules *)
 
 Lemma ISL_pure (P : iProp) (Q : val -> iProp) (phi : Prop) e :
-  (phi -> ISL P e Q) -> ISL P e (fun x => @[phi] ∗ Q x)%S.
+  (phi -> [[[ P ]]] e [[[ Q ]]]) ->
+  [[[ P ]]] e [[[ x, @[phi] ∗ Q x ]]].
 Proof.
   intros H R v h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
   rewrite left_id. rewrite left_id in Hdisj.
@@ -932,7 +945,8 @@ Proof.
 Qed.
 
 Lemma ISL_pure' (P : iProp) (Q : val -> iProp) (phi : val -> Prop) e :
-  ((exists x, phi x) -> ISL P e Q) -> ISL P e (fun x => @[phi x] ∗ Q x)%S.
+  ((exists x, phi x) -> [[[ P ]]] e [[[ Q ]]]) ->
+  [[[ P ]]] e [[[ x, @[phi x] ∗ Q x ]]].
 Proof.
   intros H R v h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
   rewrite left_id. rewrite left_id in Hdisj.
@@ -940,7 +954,8 @@ Proof.
 Qed.
 
 Lemma ISLERR_pure (P Q : iProp) (phi : Prop) e :
-  (phi -> ISLERR P e Q) -> ISLERR P e (@[phi] ∗ Q).
+  (phi -> [[[ P ]]] e [[[ERR: Q ]]]) ->
+  [[[ P ]]] e [[[ERR: @[phi] ∗ Q ]]].
 Proof.
   intros H R h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
   rewrite left_id. rewrite left_id in Hdisj.
@@ -950,7 +965,7 @@ Qed.
 (* EAmb rules *)
 
 Lemma ISL_amb n :
-  ISL emp EAmb (fun v => @[v = VNat n])%S.
+  [[[ emp ]]] EAmb [[[ v, @[v = VNat n] ]]].
 Proof.
   eapply ISL_pure_step; [|constructor].
   apply ISL_val.
@@ -978,7 +993,7 @@ Qed.
 
 Lemma Amb_not_ISLERR P Q :
   (exists h, Q h) ->
-  ~ ISLERR P EAmb Q.
+  ~ [[[ P ]]] EAmb [[[ERR: Q ]]].
 Proof.
   intros [h' HQ] HAmb.
   assert ((Q ∗ emp)%S (h' ∪ ∅)). {
@@ -1001,7 +1016,7 @@ Qed.
 (* EVar rules *)
 
 Lemma ISLERR_var x :
-  ISLERR emp (EVar x) emp.
+  [[[ emp ]]] EVar x [[[ERR: emp ]]].
 Proof.
   intros R h H.
   exists (EVar x), h.
@@ -1016,16 +1031,17 @@ Qed.
 (* ESeq rules *)
 
 Lemma ISL_seq_val (P : iProp) (Q : val -> iProp) v e :
-  ISL P e Q -> ISL P (ESeq (EVal v) e) Q.
+  [[[ P ]]] e [[[ Q ]]] ->
+  [[[ P ]]] ESeq (EVal v) e [[[ Q ]]].
 Proof.
   intros HPQ.
   eapply ISL_pure_step; [done | constructor].
 Qed.
 
 Lemma ISL_seq (P : iProp) (Q R : val -> iProp) e1 e2 :
-  ISL P e1 R ->
-  (exists v, ISL (R v) e2 Q) ->
-  ISL P (ESeq e1 e2) Q.
+  [[[ P ]]] e1 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] e2 [[[ Q ]]]) ->
+  [[[ P ]]] ESeq e1 e2 [[[ Q ]]].
 Proof.
   intros HPR HRQ.
   eapply ISL_context with (k := fun x => ESeq x e2);
@@ -1035,8 +1051,8 @@ Proof.
 Qed.
 
 Lemma ISLERR_seq (P Q : iProp) e1 e2 :
-  ISLERR P e1 Q ->
-  ISLERR P (ESeq e1 e2) Q.
+  [[[ P ]]] e1 [[[ERR: Q ]]] ->
+  [[[ P ]]] ESeq e1 e2 [[[ERR: Q ]]].
 Proof.
   intros HPQ.
   apply ISLERR_context with (k := fun x => ESeq x e2);
@@ -1044,9 +1060,9 @@ Proof.
 Qed.
 
 Lemma ISLERR_seq_right (P Q : iProp) (R : val -> iProp) e1 e2 :
-  ISL P e1 R ->
-  (exists v, ISLERR (R v) e2 Q) ->
-  ISLERR P (ESeq e1 e2) Q.
+  [[[ P ]]] e1 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] e2 [[[ERR: Q]]]) ->
+  [[[ P ]]] ESeq e1 e2 [[[ERR: Q ]]].
 Proof.
   intros HPR [v HRQ].
   eapply ISLERR_context_ISL with (k := fun x => ESeq x e2);
@@ -1060,7 +1076,7 @@ Qed.
 
 Lemma ISL_op op v1 v2 v3 :
   eval_bin_op op v1 v2 = Some v3 ->
-  ISL emp (EOp op (EVal v1) (EVal v2)) (fun x => @[x = v3])%S.
+  [[[ emp ]]] EOp op (EVal v1) (EVal v2) [[[ x, @[x = v3] ]]]%S.
 Proof.
   intros Hbin. eapply ISL_pure_step.
   - apply ISL_val.
@@ -1087,7 +1103,7 @@ Qed.
 
 Lemma ISLERR_op op v1 v2 :
   eval_bin_op op v1 v2 = None ->
-  ISLERR emp (EOp op (EVal v1) (EVal v2)) emp.
+  [[[ emp ]]] EOp op (EVal v1) (EVal v2) [[[ERR: emp]]].
 Proof.
   intros Hbin R h H.
   eexists _, h. repeat split; [done | apply steps_refl |].
@@ -1099,9 +1115,9 @@ Qed.
 (* EIf rules *)
 
 Lemma ISL_if_true (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
-  ISL (R (VBool true)) e2 Q ->
-  ISL P (EIf e1 e2 e3) Q.
+  [[[ P ]]] e1 [[[ x, @[x = VBool true] ∗ R x ]]] ->
+  [[[ R (VBool true) ]]] e2 [[[ Q ]]] ->
+  [[[ P ]]] EIf e1 e2 e3 [[[ Q ]]].
 Proof.
   intros HPR HRQ.
   eapply ISL_context with (k := fun x => EIf x e2 e3);
@@ -1114,9 +1130,9 @@ Proof.
 Qed.
 
 Lemma ISL_if_false (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
-  ISL (R (VBool false)) e3 Q ->
-  ISL P (EIf e1 e2 e3) Q.
+  [[[ P ]]] e1 [[[ x, @[x = VBool false] ∗ R x ]]] ->
+  [[[ R (VBool false) ]]] e3 [[[ Q ]]] ->
+  [[[ P ]]] EIf e1 e2 e3 [[[ Q ]]].
 Proof.
   intros HPR HRQ.
   eapply ISL_context with (k := fun x => EIf x e2 e3);
@@ -1129,8 +1145,8 @@ Proof.
 Qed.
 
 Lemma ISLERR_if (P Q : iProp) e1 e2 e3 :
-  ISLERR P e1 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
+  [[[ P ]]] e1 [[[ERR: Q ]]] ->
+  [[[ P ]]] EIf e1 e2 e3 [[[ERR: Q]]].
 Proof.
   intros HPQ.
   eapply ISLERR_context with (k := fun x => EIf x e2 e3);
@@ -1138,9 +1154,9 @@ Proof.
 Qed.
 
 Lemma ISLERR_if_true (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool true] ∗ R x)%S ->
-  ISLERR (R (VBool true)) e2 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
+  [[[ P ]]] e1 [[[ x, @[x = VBool true] ∗ R x ]]] ->
+  [[[ R (VBool true) ]]] e2 [[[ERR: Q ]]] ->
+  [[[ P ]]] EIf e1 e2 e3 [[[ERR: Q ]]].
 Proof.
   intros HPR HRQ.
   eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3);
@@ -1149,9 +1165,9 @@ Proof.
 Qed.
 
 Lemma ISLERR_if_false (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e1 (fun x => @[x = VBool false] ∗ R x)%S ->
-  ISLERR (R (VBool false)) e3 Q ->
-  ISLERR P (EIf e1 e2 e3) Q.
+  [[[ P ]]] e1 [[[ x, @[x = VBool false] ∗ R x ]]] ->
+  [[[ R (VBool false) ]]] e3 [[[ERR: Q ]]] ->
+  [[[ P ]]] EIf e1 e2 e3 [[[ERR: Q ]]].
 Proof.
   intros HPR HRQ.
   eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3);
@@ -1162,15 +1178,15 @@ Qed.
 (* EWhile rules *)
 
 Lemma ISL_While P Q e1 e2 :
-  ISL P (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit)) Q ->
-  ISL P (EWhile e1 e2) Q.
+  [[[ P ]]] EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit) [[[ Q ]]] ->
+  [[[ P ]]] EWhile e1 e2 [[[ Q ]]].
 Proof.
   eauto using ISL_pure_step, pure_step.
 Qed.
 
 Lemma ISLERR_While P Q e1 e2 :
-  ISLERR P (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit)) Q ->
-  ISLERR P (EWhile e1 e2) Q.
+  [[[ P ]]] EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit) [[[ERR: Q ]]] ->
+  [[[ P ]]] EWhile e1 e2 [[[ERR: Q ]]].
 Proof.
   eauto using ISLERR_pure_step, pure_step.
 Qed.
@@ -1181,7 +1197,7 @@ Ltac empty_left H := rewrite left_id; rewrite left_id in H.
 
 (* The basic behavior of alloc *)
 Lemma ISL_Alloc_val l v :
-  ISL emp (EAlloc (EVal v)) (fun x => @[x = VRef l] ∗ l ↦ v)%S.
+  [[[ emp ]]] EAlloc (EVal v) [[[ x, @[x = VRef l] ∗ l ↦ v ]]].
 Proof.
   intros R v0 h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
   empty_left Hdisj.
@@ -1194,14 +1210,14 @@ Qed.
 
 (* Alternative alloc triple, more similar to CISL paper *)
 Lemma ISL_Alloc_fresh v :
-  ISL emp (EAlloc (EVal v)) (fun x => ∃ l, @[x = VRef l] ∗ l ↦ v)%S.
+  [[[ emp ]]] EAlloc (EVal v) [[[ x, ∃ l, @[x = VRef l] ∗ l ↦ v ]]].
 Proof.
   eauto using ISL_exists_post, ISL_Alloc_val.
 Qed.
 
 (* This lemma shows that we can reuse previously freed locations *)
 Lemma ISL_Alloc_reuse l v :
-  ISL (l ↦ ⊥) (EAlloc (EVal v)) (fun x => @[x = VRef l] ∗ l ↦ v)%S.
+  [[[ l ↦ ⊥ ]]] EAlloc (EVal v) [[[ x, @[x = VRef l] ∗ l ↦ v ]]].
 Proof.
   intros R v0 h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
   empty_left Hdisj.
@@ -1220,7 +1236,7 @@ Qed.
 (* ELoad rules *)
 
 Lemma ISL_Load l v :
-  ISL (l ↦ v) (ELoad (EVal (VRef l))) (fun x => @[x = v] ∗ l ↦ v)%S.
+  [[[ l ↦ v ]]] ELoad (EVal (VRef l)) [[[ x, @[x = v] ∗ l ↦ v ]]].
 Proof.
   intros R x h' (h'' & h2 & (h0 & h1 & [-> ->] & -> & -> & Hdisj') & H2 & -> & Hdisj).
   empty_left Hdisj. exists ({[l := Value v]} ∪ h2).
@@ -1244,7 +1260,7 @@ Proof.
 Qed.
 
 Lemma ISLERR_load l :
-  ISLERR (l ↦ ⊥) (ELoad (EVal (VRef l))) (l ↦ ⊥).
+  [[[ l ↦ ⊥ ]]] ELoad (EVal (VRef l)) [[[ERR: l ↦ ⊥ ]]].
 Proof.
   intros R h' (h1 & h2 & -> & H2 & -> & Hdisj).
   exists (ELoad (EVal (VRef l))), ({[l := Reserved]} ∪ h2).
@@ -1256,7 +1272,7 @@ Qed.
 (* EStore rules *)
 
 Lemma ISL_Store l v w :
-  ISL (l ↦ v) (EStore (EVal (VRef l)) (EVal w)) (fun x => @[x = VUnit] ∗ (l ↦ w))%S.
+  [[[ l ↦ v ]]] EStore (EVal (VRef l)) (EVal w) [[[ x, @[x = VUnit] ∗ l ↦ w ]]].
 Proof.
   intros R x h' (h1 & h2 & (h0 & hl & [-> ->] & -> & -> & Hdisj') & H2 & -> & Hdisj).
   empty_left Hdisj.
@@ -1285,7 +1301,7 @@ Proof.
 Qed.
 
 Lemma ISLERR_store l v :
-  ISLERR (l ↦ ⊥) (EStore (EVal (VRef l)) (EVal v)) (l ↦ ⊥).
+  [[[ l ↦ ⊥ ]]] EStore (EVal (VRef l)) (EVal v) [[[ERR: l ↦ ⊥ ]]].
 Proof.
   intros R h' (h0 & hR & -> & HR & -> & Hdisj).
   exists (EStore (EVal (VRef l)) (EVal v)), ({[l := Reserved]} ∪ hR).
@@ -1297,7 +1313,7 @@ Qed.
 (* EFree rules *)
 
 Lemma ISL_free l v :
-  ISL (l ↦ v) (EFree (EVal (VRef l))) (fun x => @[x = VUnit] ∗ l ↦ ⊥)%S.
+  [[[ l ↦ v ]]] EFree (EVal (VRef l)) [[[ x, @[x = VUnit] ∗ l ↦ ⊥ ]]].
 Proof.
   intros R x h' (h0 & hR & (h1 & h2 & [-> ->] & -> & -> & Hdisj') & HR & -> & Hdisj).
   empty_left Hdisj.
@@ -1326,7 +1342,7 @@ Proof.
 Qed.
 
 Lemma ISLERR_free l :
-  ISLERR (l ↦ ⊥) (EFree (EVal (VRef l))) (l ↦ ⊥).
+  [[[ l ↦ ⊥ ]]] EFree (EVal (VRef l)) [[[ERR: l ↦ ⊥ ]]].
 Proof.
   intros R h' (h0 & hR & -> & HR & -> & Hdisj).
   exists (EFree (EVal (VRef l))), ({[l := Reserved]} ∪ hR).
@@ -1338,7 +1354,7 @@ Qed.
 (* EPar rules *)
 
 Lemma ISL_par_val (Q1 Q2 : val -> iProp) v v' :
-  ISL (Q1 v ∗ Q2 v')%S (EPar (EVal v) (EVal v')) (fun v0 => (@[ v0 = VPair v v' ] ∗ Q1 v ∗ Q2 v')%S).
+  [[[ Q1 v ∗ Q2 v' ]]] EPar (EVal v) (EVal v') [[[ x, @[x = VPair v v'] ∗ Q1 v ∗ Q2 v' ]]].
 Proof.
   eapply ISL_pure_step; [|constructor].
   eapply ISL_sep_assoc_post, ISL_frame, ISL_cons; [apply iSep_emp_l_inv | intros v0; apply iEntails_refl |].
@@ -1346,7 +1362,7 @@ Proof.
 Qed.
 
 Lemma ISL_par_val_emp v v' :
-  ISL (emp)%S (EPar (EVal v) (EVal v')) (fun v0 => @[ v0 = VPair v v'])%S.
+  [[[ emp ]]] EPar (EVal v) (EVal v') [[[ x, @[x = VPair v v'] ]]].
 Proof.
   eauto using ISL_pure_step, ISL_val, pure_step.
 Qed.
@@ -1364,9 +1380,9 @@ Qed.
 *)
 
 Lemma ISL_par (P1 P2 : iProp) (Q1 Q2 : val -> iProp) e1 e2 v1 v2 :
-  ISL P1 e1 (fun v => @[ v = v1 ] ∗ Q1 v)%S ->
-  ISL P2 e2 (fun v => @[ v = v2 ] ∗ Q2 v)%S ->
-  ISL (P1 ∗ P2)%S (EPar e1 e2) (fun v => @[ v = VPair v1 v2 ] ∗ Q1 v1 ∗ Q2 v2)%S.
+  [[[ P1 ]]] e1 [[[ v, @[ v = v1 ] ∗ Q1 v ]]] ->
+  [[[ P2 ]]] e2 [[[ v, @[ v = v2 ] ∗ Q2 v ]]] ->
+  [[[ P1 ∗ P2 ]]] EPar e1 e2 [[[ v, @[ v = VPair v1 v2 ] ∗ Q1 v1 ∗ Q2 v2 ]]].
 Proof.
   intros H1 H2.
   eapply ISL_context with (k := fun x => EPar x e2); [eauto with context| |].
@@ -1381,8 +1397,8 @@ Proof.
 Qed.
 
 Lemma ISL_par_err (P Q : iProp) (e1 e2 : expr) :
-  (ISLERR P e1 Q \/ ISLERR P e2 Q) ->
-  ISLERR P (EPar e1 e2) Q.
+  ([[[ P ]]] e1 [[[ERR: Q ]]] \/ [[[ P ]]] e2 [[[ERR: Q ]]]) ->
+  [[[ P ]]] EPar e1 e2 [[[ERR: Q ]]].
 Proof.
   intros [H | H].
   - apply ISLERR_context with (k := fun x => EPar x e2); [eauto with context | done].
@@ -1390,9 +1406,9 @@ Proof.
 Qed.
 
 Lemma ISL_par_l (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
-  ISL P e1 R ->
-  (exists v, ISL (R v) (EPar e2 e3) Q) ->
-  ISL P (EPar (ESeq e1 e2) e3) Q.
+  [[[ P ]]] e1 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] EPar e2 e3 [[[ Q ]]]) ->
+  [[[ P ]]] EPar (ESeq e1 e2) e3 [[[ Q ]]].
 Proof.
   intros HPR [v HRQ].
   eapply ISL_context with (k := fun x => EPar (ESeq x e2) e3); [|done|].
@@ -1402,9 +1418,9 @@ Proof.
 Qed.
 
 Lemma ISL_par_l_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e1 R ->
-  (exists v, ISLERR (R v) (EPar e2 e3) Q) ->
-  ISLERR P (EPar (ESeq e1 e2) e3) Q.
+  [[[ P ]]] e1 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] EPar e2 e3 [[[ERR: Q ]]]) ->
+  [[[ P ]]] EPar (ESeq e1 e2) e3 [[[ERR: Q ]]].
 Proof.
   intros HPR [v HRQ].
   eapply ISLERR_context_ISL with (k := fun x => EPar (ESeq x e2) e3).
@@ -1416,9 +1432,9 @@ Proof.
 Qed.
 
 Lemma ISL_par_r (P : iProp) (R Q : val -> iProp) e1 e2 e3 :
-  ISL P e2 R ->
-  (exists v, ISL (R v) (EPar e1 e3) Q) ->
-  ISL P (EPar e1 (ESeq e2 e3)) Q.
+  [[[ P ]]] e2 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] (EPar e1 e3) [[[ Q ]]]) ->
+  [[[ P ]]] EPar e1 (ESeq e2 e3) [[[ Q ]]].
 Proof.
   intros HPR [v HRQ].
   eapply ISL_context with (k := fun x => EPar e1 (ESeq x e3)); [|done|].
@@ -1428,9 +1444,9 @@ Proof.
 Qed.
 
 Lemma ISL_par_r_err (P Q : iProp) (R : val -> iProp) e1 e2 e3 :
-  ISL P e2 R ->
-  (exists v, ISLERR (R v) (EPar e1 e3) Q) ->
-  ISLERR P (EPar e1 (ESeq e2 e3)) Q.
+  [[[ P ]]] e2 [[[ R ]]] ->
+  (exists v, [[[ R v ]]] EPar e1 e3 [[[ERR: Q ]]]) ->
+  [[[ P ]]] EPar e1 (ESeq e2 e3) [[[ERR: Q ]]].
 Proof.
   intros HPR [v HRQ].
   eapply ISLERR_context_ISL with (k := fun x => EPar e1 (ESeq x e3)).
@@ -1468,8 +1484,8 @@ Proof.
 Qed.
 
 Lemma ISL_par_pair (P : iProp) (Q : val -> iProp) e1 e2 :
-  ISL P (EPair e1 e2) Q ->
-  ISL P (EPar e1 e2) Q.
+  [[[ P ]]] EPair e1 e2 [[[ Q ]]] ->
+  [[[ P ]]] EPar e1 e2 [[[ Q ]]].
 Proof.
   intros HPair R v h' HQR.
   destruct (HPair R v h' HQR) as (h & HPR & Hsteps).
@@ -1506,8 +1522,8 @@ Proof.
 Qed.
 
 Lemma ISL_par_mirror (P : iProp) (Q : val -> iProp) e1 e2 v1 v2 :
-  ISL P (EPar e1 e2) (fun x => @[x = VPair v1 v2] ∗ Q (VPair v1 v2))%S ->
-  ISL P (EPar e2 e1) (fun x => @[x = VPair v2 v1] ∗ Q (VPair v1 v2))%S.
+  [[[ P ]]] EPar e1 e2 [[[ x, @[x = VPair v1 v2] ∗ Q (VPair v1 v2) ]]] ->
+  [[[ P ]]] EPar e2 e1 [[[ x, @[x = VPair v2 v1] ∗ Q (VPair v1 v2) ]]].
 Proof.
   intros HPair R v h' (h'' & hR & (h1 & h2 & [-> ->] & HQ & -> & Hdisj') & HR & Heq & Hdisj).
   destruct (HPair R (VPair v1 v2) h') as (h & HPR & Hsteps); simplify_eq.
@@ -1545,7 +1561,7 @@ Ltac ISLERR_pure_true := eapply ISLERR_cons;
   [eauto using iPure_intro' | intros v; apply iEntails_refl |].
 
 Example correct_execution lx lz :
-  ISL emp Ex_mem (fun x => @[x = VPair VUnit VUnit] ∗ lz ↦ VNat 1 ∗ lx ↦ ⊥)%S.
+  [[[ emp ]]] Ex_mem [[[ x, @[x = VPair VUnit VUnit] ∗ lz ↦ VNat 1 ∗ lx ↦ ⊥ ]]].
 Proof.
   unfold Ex_mem.
   eapply ISL_context with (k := fun x => ELet _ x _);
@@ -1599,7 +1615,7 @@ Proof.
 Qed.
 
 Example erroneous_execution lx lz :
-  ISLERR emp Ex_mem (lz ↦ VNat 1 ∗ lx ↦ ⊥)%S.
+  [[[ emp ]]] Ex_mem [[[ERR: lz ↦ VNat 1 ∗ lx ↦ ⊥ ]]].
 Proof.
   unfold Ex_mem.
   eapply ISLERR_context_ISL_exists with (k := fun x => ELet _ x _);
