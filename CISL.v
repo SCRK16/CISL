@@ -23,6 +23,7 @@ Inductive val :=
 
 Inductive expr :=
   | EVal : val -> expr
+  | EAmb : expr
   | EVar : string -> expr
   | EPair : expr -> expr -> expr
   | EFst : expr -> expr
@@ -30,6 +31,7 @@ Inductive expr :=
   | ELet : string -> expr -> expr -> expr
   | EOp : bin_op -> expr -> expr -> expr
   | EIf : expr -> expr -> expr -> expr
+  | EWhile : expr -> expr -> expr
   | ESeq : expr -> expr -> expr
   | EAlloc : expr -> expr
   | ELoad : expr -> expr
@@ -40,6 +42,7 @@ Inductive expr :=
 Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   match e with
   | EVal _ => e
+  | EAmb => EAmb
   | EVar y => if string_dec y x then EVal w else EVar y
   | EPair e1 e2 => EPair (subst x w e1) (subst x w e2)
   | EFst e' => EFst (subst x w e')
@@ -49,6 +52,7 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
      else ELet y (subst x w e1) (subst x w e2)
   | EOp op e1 e2 => EOp op (subst x w e1) (subst x w e2)
   | EIf e1 e2 e3 => EIf (subst x w e1) (subst x w e2) (subst x w e3)
+  | EWhile e1 e2 => EWhile (subst x w e1) (subst x w e2)
   | ESeq e1 e2 => ESeq (subst x w e1) (subst x w e2)
   | EAlloc e' => EAlloc (subst x w e')
   | ELoad e' => ELoad (subst x w e')
@@ -84,6 +88,7 @@ Fixpoint eval_bin_op (op : bin_op) (v1 v2 : val) : option val :=
 
 (* Small steps that don't alter the heap *)
 Inductive pure_step : expr -> expr -> Prop :=
+  | Amb_step n : pure_step EAmb (EVal (VNat n))
   | Pair_step v1 v2 :
       pure_step (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2))
   | Fst_step e1 e2 :
@@ -99,6 +104,8 @@ Inductive pure_step : expr -> expr -> Prop :=
       pure_step (EIf (EVal (VBool true)) e1 e2) e1
   | If_false_step e1 e2 :
       pure_step (EIf (EVal (VBool false)) e1 e2) e2
+  | While_step e1 e2 :
+      pure_step (EWhile e1 e2) (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit))
   | Seq_step v e :
       pure_step (ESeq (EVal v) e) e
   | Par_step v1 v2 :
@@ -246,7 +253,7 @@ Proof.
 Qed.
 
 Lemma steps_heap_mono e m e' m' x :
-  steps e m e' m' → m' ##ₘ x -> m ##ₘ x.
+  steps e m e' m' → m' ### x -> m ### x.
 Proof.
   induction 1; eauto using step_heap_mono.
 Qed.
@@ -273,7 +280,7 @@ Proof.
 Qed.
 
 Lemma head_step_frame_equiv e m e' m' :
-  head_step e m e' m' <-> ∀ mf, m' ##ₘ mf -> head_step e (m ∪ mf) e' (m' ∪ mf).
+  head_step e m e' m' <-> ∀ mf, m' ### mf -> head_step e (m ∪ mf) e' (m' ∪ mf).
 Proof.
   split.
   1: {intros. destruct H; rewrite -? insert_union_l; try by econstructor; eauto;
@@ -289,7 +296,7 @@ Proof.
 Qed.
 
 Lemma step_frame_equiv e m e' m' :
-  step e m e' m'  ↔ ∀ mf, m' ##ₘ mf -> step e (m ∪ mf) e' (m' ∪ mf).
+  step e m e' m'  ↔ ∀ mf, m' ### mf -> step e (m ∪ mf) e' (m' ∪ mf).
 Proof.
   split.
   - intros []. rewrite head_step_frame_equiv in H0.
@@ -299,12 +306,12 @@ Proof.
 Qed.
 
 Lemma steps_frame_equiv e h e' h' :
-  steps e h e' h' ↔ ∀ hf, h' ##ₘ hf → steps e (h ∪ hf) e' (h' ∪ hf).
+  steps e h e' h' ↔ ∀ hf, h' ### hf → steps e (h ∪ hf) e' (h' ∪ hf).
 Proof.
   split.
   - induction 1; eauto using steps.
     intros.
-    assert (h2 ##ₘ hf). { eapply steps_heap_mono; eauto. }
+    assert (h2 ### hf). { eapply steps_heap_mono; eauto. }
     rewrite step_frame_equiv in H.
     eapply steps_step; eauto.
   - intros. specialize (H _ (map_disjoint_empty_r _)).
@@ -358,11 +365,21 @@ Proof.
   destruct Herr as (k' & e' & Hctx' & -> & Herr).
   induction Hctx.
   - exists k', e'. by do 2 try split.
-
   - destruct IHHctx as (k'' & e'' & Hctx'' & -> & Herr'').
     exists (fun x => k1 (k'' x)), e''. do 2 try split; try done. by apply Compose_ctx.
 Qed.
 
+Lemma val_not_error v h :
+  ~ is_error (EVal v) h.
+Proof.
+  intros (k & e' & Hctx & Heq & Hunsafe).
+  symmetry in Heq.
+  apply (context_EVal _ _ _ Hctx) in Heq as [-> ->].
+  destruct Hunsafe as [Hval _].
+  by apply Hval.
+Qed.
+
+Declare Scope S.
 Delimit Scope S with S.
 
 Definition iProp := heap → Prop.
@@ -373,8 +390,8 @@ Definition iEntails (P Q : iProp) : Prop := ∀ m, P m → Q m.
 Definition iEmp : iProp := λ m, m = ∅.
 Definition iPoints (l : nat) (v : val) : iProp := λ m, m = {[ l := (Value v) ]}.
 Definition iNegPoints (l : nat) : iProp := λ m, m = {[ l := Reserved ]}.
-Definition iSep (P Q : iProp) : iProp := λ m, ∃ m1 m2, P m1 ∧ Q m2 ∧ m = m1 ∪ m2 ∧ m1 ##ₘ m2 .
-Definition iWand (P Q : iProp) : iProp := λ m, ∀ m', m ##ₘ m' → P m' → Q (m' ∪ m).
+Definition iSep (P Q : iProp) : iProp := λ m, ∃ m1 m2, P m1 ∧ Q m2 ∧ m = m1 ∪ m2 ∧ m1 ### m2 .
+Definition iWand (P Q : iProp) : iProp := λ m, ∀ m', m ### m' → P m' → Q (m' ∪ m).
 Definition iTrue : iProp := λ m , True.
 Definition iAnd (P Q : iProp) : iProp := λ m, P m ∧ Q m.
 Definition iOr (P Q : iProp) : iProp := λ m, P m ∨ Q m.
@@ -889,7 +906,8 @@ Lemma ILERR_disj (P P' Q Q' : iProp) e :
   ILERR (P ∨ P')%S e (Q ∨ Q')%S.
 Proof.
   intros H H' h' [HQ | HQ'];
-  [ destruct (H h' HQ) as (e' & h & HP & Hsteps & Herr) | destruct (H' h' HQ') as (e' & h & HP & Hsteps & Herr) ];
+  [ destruct (H h' HQ) as (e' & h & HP & Hsteps & Herr)
+  | destruct (H' h' HQ') as (e' & h & HP & Hsteps & Herr) ];
   exists e', h; split; eauto; by [left | right].
 Qed.
 
@@ -899,9 +917,8 @@ Lemma ISLERR_disj (P P' Q Q' : iProp) e :
   ISLERR (P ∨ P')%S e (Q ∨ Q')%S.
 Proof.
   intros H H' R.
-  eapply ILERR_cons.
-  3: { apply ILERR_disj; [apply H | apply H']. }
-  1,2: eauto using iOr_distr, iOr_distr'.
+  eapply ILERR_cons; eauto using iOr_distr, iOr_distr'.
+  eauto using ILERR_disj.
 Qed.
 
 (* Pure rules *)
@@ -928,6 +945,72 @@ Proof.
   intros H R h (h' & hR & (h0 & hQ & [Hphi ->] & HQ & -> & Hdisj') & HR & -> & Hdisj).
   rewrite left_id. rewrite left_id in Hdisj.
   destruct (H Hphi R (hQ ∪ hR)) as (h & HP & Hsteps); [exists hQ, hR|]; eauto.
+Qed.
+
+(* EAmb rules *)
+
+Lemma ISL_amb n :
+  ISL emp EAmb (fun v => @[v = VNat n])%S.
+Proof.
+  eapply ISL_pure_step; [|constructor].
+  apply ISL_val.
+Qed.
+
+Lemma ctx_amb_is_amb k e :
+  ctx k ->
+  EAmb = k e ->
+  k = (fun x => x) /\ e = EAmb.
+Proof.
+  intros Hctx Heq.
+  inv Hctx; [done|].
+  inv H.
+Qed.
+
+Lemma Amb_not_error h :
+  ~ is_error EAmb h.
+Proof.
+  intros (k & e & H1 & H2 & H3).
+  apply (ctx_amb_is_amb _ _ H1) in H2 as [-> ->].
+  destruct H3. eapply H0.
+  eapply head_step_step. constructor.
+  apply (Amb_step 0).
+Qed.
+
+Lemma Amb_not_ISLERR P Q :
+  (exists h, Q h) ->
+  ~ ISLERR P EAmb Q.
+Proof.
+  intros [h' HQ] HAmb.
+  assert ((Q ∗ emp)%S (h' ∪ ∅)). {
+    exists h', ∅.
+    repeat split; try done.
+    apply map_disjoint_empty_r.
+  }
+  destruct (HAmb emp%S (h' ∪ ∅) H) as (e' & h & Hh' & Hsteps & Herr).
+  inv Hsteps.
+  - by eapply Amb_not_error.
+  - inv H0. symmetry in H2.
+    apply (ctx_amb_is_amb _ _ H3) in H2 as [-> ->].
+    inv H4. inv H0. inv H1.
+    + by eapply val_not_error.
+    + inv H0.
+      apply (context_EVal _ _ _ H4) in H1 as [-> ->].
+      inv H5. inv H0.
+Qed.
+
+(* EVar rules *)
+
+Lemma ISLERR_var x :
+  ISLERR emp (EVar x) emp.
+Proof.
+  intros R h H.
+  exists (EVar x), h.
+  repeat split; eauto using steps.
+  apply unsafe_is_error. split; [tauto|].
+  intros e' h' Hstep.
+  inv Hstep. inv H1.
+  - inv H2. inv H0.
+  - inv H3.
 Qed.
 
 (* ESeq rules *)
@@ -1074,6 +1157,22 @@ Proof.
   eapply ISLERR_context_ISL with (k := fun x => EIf x e2 e3);
   [eauto with context | done |].
   eapply ISLERR_pure_step; [done | constructor].
+Qed.
+
+(* EWhile rules *)
+
+Lemma ISL_While P Q e1 e2 :
+  ISL P (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit)) Q ->
+  ISL P (EWhile e1 e2) Q.
+Proof.
+  eauto using ISL_pure_step, pure_step.
+Qed.
+
+Lemma ISLERR_While P Q e1 e2 :
+  ISLERR P (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit)) Q ->
+  ISLERR P (EWhile e1 e2) Q.
+Proof.
+  eauto using ISLERR_pure_step, pure_step.
 Qed.
 
 (* EAlloc rules *)
@@ -1505,7 +1604,7 @@ Proof.
   unfold Ex_mem.
   eapply ISLERR_context_ISL_exists with (k := fun x => ELet _ x _);
   [eauto with context | apply ISL_Alloc_val | simpl].
-  exists (VRef lx). ISLERR_pure_true. 
+  exists (VRef lx). ISLERR_pure_true.
   eapply ISLERR_pure_step; [|constructor]. simpl.
   eapply ISLERR_context_ISL_exists with (k := fun x => ELet _ x _);
   [eauto with context | eapply ISL_frame', ISL_Alloc_val |].
@@ -1535,15 +1634,18 @@ Definition Ex_race (n : nat) : expr :=
   ).
 
 (*
-  1) Alloc, Load, Store, Free --> DONE
-  2) Examples with Par rules
-  3) Use proofmode.v for Iris tactics
-  4) Write down in paper
-    -> Operational semantics
-    -> Contexts using K ::= O | load K | ..., same order as operational semantics
-    -> Unsafe
-    -> Triple definitions
-    -> Rules
-    -> Example (also after operational semantics, then show how to prove it unsafe here)
-  5) CISL RD/DD
+  1[x] Alloc, Load, Store, Free
+  2[x] Examples with Par rules
+  3[ ] Use proofmode.v for Iris tactics
+  4[ ] Write down in paper
+    [x] Operational semantics
+    [x] Contexts using K ::= O | load K | ..., same order as operational semantics
+    [x] Unsafe
+    [x] Triple definitions
+    [ ] Rules
+    [ ] Example (also after operational semantics, then show how to prove it unsafe here)
+  5[ ] Module with notations, import in section with examples
+  6[ ] Add lock/unlock
+  7[ ] CISL RD/DD
+
 *)
