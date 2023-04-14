@@ -1,4 +1,4 @@
-
+*.crashcoqide
 *.glob
 *.vo
 *.vok
@@ -6,3 +6,4 @@
 *.aux
 .DS_Store
 #*#
+*.v#
