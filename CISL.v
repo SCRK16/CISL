@@ -1312,23 +1312,6 @@ Proof.
   by inv Hh.
 Qed.
 
-Definition stuck (e : expr) (h : heap) : Prop :=
-    ¬ is_val e /\ forall e' h', ¬ step e h e' h'.
-
-Lemma err_is_stuck (e : expr) (Q : iProp) :
-  [[[ emp ]]] e [[[ERR: Q ]]] ->
-  (exists h', Q h') ->
-  exists e' h', steps e ∅ e' h' /\ stuck e' h'.
-Proof.
-  intros HISLERR [h' HQ].
-  specialize (HISLERR emp%S).
-  apply ILERR_cons with (P := emp%S) (Q := Q) in HISLERR;
-  [ | eauto with seplogic..].
-  destruct (HISLERR h' HQ) as (e' & h & Hh & Hsteps & Herr).
-  unfold is_error, imm_unsafe in Herr.
-  admit.
-Admitted.
-
 (* Examples *)
 
 Definition Ex_mem : expr :=

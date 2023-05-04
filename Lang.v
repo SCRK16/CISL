@@ -97,10 +97,10 @@ Inductive pure_step : expr -> expr -> Prop :=
   | Amb_step n : pure_step EAmb (EVal (VNat n))
   | Pair_step v1 v2 :
       pure_step (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2))
-  | Fst_step e1 e2 :
-      pure_step (EFst (EPair e1 e2)) e1
-  | Snd_step e1 e2 :
-      pure_step (ESnd (EPair e1 e2)) e2
+  | Fst_step v1 v2 :
+      pure_step (EFst (EVal (VPair v1 v2))) (EVal v1)
+  | Snd_step v1 v2 :
+      pure_step (ESnd (EVal (VPair v1 v2))) (EVal v2)
   | Let_step y e v :
       pure_step (ELet y (EVal v) e) (subst y v e)
   | Op_step op v1 v2 v3 :
@@ -199,8 +199,6 @@ Proof.
   intros Hk. induction Hk; [done|].
   intros Hk12. inv H.
 Qed.
-
-Definition cfg : Type := expr * heap.
 
 Inductive step : expr -> heap -> expr -> heap -> Prop :=
   | do_step k e e' h h' :
@@ -341,6 +339,13 @@ Definition is_val (e : expr) :=
     | EVal _ => True
     | _ => False
   end.
+
+Lemma not_is_val_ctx1 e k :
+  ctx1 k -> ¬ is_val (k e).
+Proof.
+  intros Hctx Hnval.
+  by inv Hctx.
+Qed.
 
 Lemma not_is_val_context e k :
   ctx k -> ¬ is_val e -> ¬ is_val (k e).
