@@ -1,4 +1,5 @@
 From Coq Require Export Strings.String.
+From Coq Require Import Program.Equality.
 From iris.proofmode Require Import tactics.
 
 Tactic Notation "inv" ident(H) "as" simple_intropattern(ipat) :=
@@ -21,6 +22,18 @@ Inductive val :=
   | VRef : nat -> val
   | VPair : val -> val -> val
   | VLock : bool -> val.
+
+Lemma val_eq_dec (v v' : val) :
+  v = v' \/ v ≠ v'.
+Proof.
+  dependent induction v; destruct v'; eauto.
+  1, 5: destruct b; destruct b0; eauto.
+  1, 2: destruct (Nat.eq_dec n n0);
+    try (left; by f_equal);
+    right; intros Heq; simplify_eq.
+  destruct (IHv1 v'1); destruct (IHv2 v'2); simplify_eq;
+  try (by left); right; intros Heq; simplify_eq.
+Qed.
 
 Inductive expr :=
   | EVal : val -> expr

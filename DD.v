@@ -1,5 +1,7 @@
 From Coq Require Export Strings.String.
 From Coq Require Import Lists.List.
+From Coq Require Import Program.Equality.
+From Coq Require Import Bool.DecBool.
 From iris.proofmode Require Import tactics.
 Require Import Lang.
 
@@ -199,160 +201,230 @@ Admitted.
         HISTORIES
 ************************)
 
-(* Define new step relation h_step (Step with Histories) *)
+(* 
+   Define new step relation steps_trace
+   This is a step relation that also keeps track of a trace (history),
+   the events that have happened during the execution of the program
+*)
+
+Inductive base_event :=
+  | Lock : val -> base_event
+  | Unlock : val -> base_event
+  | Join : base_event.
 
 Inductive event :=
-  | Lock : val -> event
-  | Unlock : val -> event
+  | Base : base_event -> event
   | Left : event -> event
   | Right : event -> event.
-  (*| End : event.*)
 
-Fixpoint val_eqb (v1 v2 : val) : bool :=
-  match v1, v2 with
-  | VUnit, VUnit => true
-  | VBool b1, VBool b2 => Bool.eqb b1 b2
-  | VNat n1, VNat n2 => Nat.eqb n1 n2
-  | VRef l1, VRef l2 => Nat.eqb l1 l2
-  | VPair v1' v1'', VPair v2' v2'' => andb (val_eqb v1' v2') (val_eqb v1'' v2'')
-  | VLock l1, VLock l2 => Bool.eqb l1 l2
-  | _, _ => false
-  end.
+Lemma base_event_eq_dec (a b : base_event) :
+  a = b \/ a ≠ b.
+Proof.
+  destruct a; destruct b; eauto;
+  destruct (val_eq_dec v v0);
+  try (left; by f_equal);
+  right; intros Heq; simplify_eq.
+Qed.
 
-Fixpoint event_eqb (s1 s2 : event) : bool :=
-  match s1, s2 with
-  | Lock v1, Lock v2 => val_eqb v1 v2
-  | Unlock v1, Unlock v2 => val_eqb v1 v2
-  | Left s1', Left s2' => event_eqb s1' s2'
-  | Right s1', Left s2' => event_eqb s1' s2'
-  (*| End, End => true*)
-  | _, _ => false
-  end.
+Lemma event_eq_dec (a b : event) :
+  a = b \/ a ≠ b.
+Proof.
+  dependent induction a;
+  [destruct b0 | destruct b..]; eauto;
+  [destruct (base_event_eq_dec b0 b) | destruct (IHa b)..];
+  try (left; by f_equal);
+  right; intros Heq; simplify_eq.
+Qed.
 
 Definition trace : Type := list event.
 
-Inductive h_head_step : expr -> heap -> expr -> heap -> trace -> Prop :=
-  | h_pure_step e e' h :
-      pure_step e e' ->
-      h_head_step e h e' h []
-  | h_alloc_headstep h v l :
+Inductive pure_step_trace : expr -> expr -> option base_event -> Prop :=
+  | Amb_step_trace n :
+      pure_step_trace EAmb (EVal (VNat n)) None
+  | Pair_step_trace v1 v2 :
+      pure_step_trace (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2)) None
+  | Fst_step_trace v1 v2 :
+      pure_step_trace (EFst (EVal (VPair v1 v2))) (EVal v1) None
+  | Snd_step_trace v1 v2 :
+      pure_step_trace (ESnd (EVal (VPair v1 v2))) (EVal v2) None
+  | Let_step_trace y e v :
+      pure_step_trace (ELet y (EVal v) e) (subst y v e) None
+  | Op_step_trace op v1 v2 v3 :
+      eval_bin_op op v1 v2 = Some v3 ->
+      pure_step_trace (EOp op (EVal v1) (EVal v2)) (EVal v3) None
+  | If_true_step_trace e1 e2 :
+      pure_step_trace (EIf (EVal (VBool true)) e1 e2) e1 None
+  | If_false_step_trace e1 e2 :
+      pure_step_trace (EIf (EVal (VBool false)) e1 e2) e2 None
+  | While_step_trace e1 e2 :
+      pure_step_trace (EWhile e1 e2) (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit)) None
+  | Seq_step_trace v e :
+      pure_step_trace (ESeq (EVal v) e) e None
+  | Par_step_trace v1 v2 :
+      pure_step_trace (EPar (EVal v1) (EVal v2)) (EVal (VPair v1 v2)) (Some Join).
+
+Inductive head_step_trace : expr -> heap -> expr -> heap -> option base_event -> Prop :=
+  | do_pure_step_trace e e' h b :
+      pure_step_trace e e' b ->
+      head_step_trace e h e' h b
+  | alloc_head_step_trace h v l :
       valid_alloc h l →
-      h_head_step (EAlloc (EVal v)) h (EVal (VRef l)) (<[ l := (Value v) ]> h) []
-  | h_load_headstep h v l :
+      head_step_trace
+        (EAlloc (EVal v)) h
+        (EVal (VRef l)) (<[ l := (Value v) ]> h) None
+  | load_head_step_trace h v l :
       h !! l = Some (Value v) →
-      h_head_step (ELoad (EVal (VRef l))) h (EVal v) h []
-  | h_store_headstep h v w l :
+      head_step_trace
+        (ELoad (EVal (VRef l))) h
+        (EVal v) h None
+  | store_head_step_trace h v w l :
       h !! l = Some (Value w) →
-      h_head_step (EStore (EVal (VRef l)) (EVal v)) h (EVal VUnit) (<[ l := (Value v) ]> h) []
-  | h_free_headstep h v l :
+      head_step_trace
+        (EStore (EVal (VRef l)) (EVal v)) h
+        (EVal VUnit) (<[ l := (Value v) ]> h) None
+  | free_head_step_trace h v l :
       h !! l = Some (Value v) →
-      h_head_step (EFree (EVal (VRef l))) h (EVal VUnit) (<[l := Reserved ]> h) []
-  | h_lock_headstep h l :
-      h_head_step (ELock (EVal (VRef l))) h (EVal VUnit) h [Lock (VRef l)]
-  | h_unlock_headstep h l :
-      h !! l = Some (Value (VLock true)) →
-      h_head_step (EUnlock (EVal (VRef l))) h (EVal VUnit) h [Unlock (VRef l)].
+      head_step_trace
+        (EFree (EVal (VRef l))) h
+        (EVal VUnit) (<[l := Reserved ]> h) None
+  | lock_head_step_trace h l :
+      head_step_trace
+        (ELock (EVal (VRef l))) h
+        (EVal VUnit) h (Some (Lock (VRef l)))
+  | unlock_head_step_trace h l :
+      head_step_trace
+        (EUnlock (EVal (VRef l))) h
+        (EVal VUnit) h (Some (Unlock (VRef l))).
 
-Inductive h_ctx1 : (expr -> expr) -> Prop :=
-  | h_pair_l_ctx e : h_ctx1 (fun x => EPair x e)
-  | h_pair_r_ctx v : h_ctx1 (EPair (EVal v))
-  | h_fst_ctx : h_ctx1 EFst
-  | h_snd_ctx : h_ctx1 ESnd
-  | h_let_ctx y e : h_ctx1 (fun x => ELet y x e)
-  | h_op_l_ctx op e : h_ctx1 (fun x => EOp op x e)
-  | h_op_r_ctx op v : h_ctx1 (fun x => EOp op (EVal v) x)
-  | h_if_ctx e1 e2 : h_ctx1 (fun x => EIf x e1 e2)
-  | h_seq_ctx e : h_ctx1 (fun x => ESeq x e)
-  | h_alloc_ctx : h_ctx1 EAlloc
-  | h_load_ctx : h_ctx1 ELoad
-  | h_store_l_ctx e : h_ctx1 (fun x => EStore x e)
-  | h_store_r_ctx v : h_ctx1 (EStore (EVal v))
-  | h_free_ctx : h_ctx1 EFree
-  | h_lock_ctx : h_ctx1 ELock
-  | h_unlock_ctx : h_ctx1 EUnlock.
+Inductive ctx_trace : (expr -> expr) -> Prop :=
+  | pair_l_ctx_trace e : ctx_trace (fun x => EPair x e)
+  | pair_r_ctx_trace v : ctx_trace (EPair (EVal v))
+  | fst_ctx_trace : ctx_trace EFst
+  | snd_ctx_trace : ctx_trace ESnd
+  | let_ctx_trace y e : ctx_trace (fun x => ELet y x e)
+  | op_l_ctx_trace op e : ctx_trace (fun x => EOp op x e)
+  | op_r_ctx_trace op v : ctx_trace (fun x => EOp op (EVal v) x)
+  | if_ctx_trace e1 e2 : ctx_trace (fun x => EIf x e1 e2)
+  | seq_ctx_trace e : ctx_trace (fun x => ESeq x e)
+  | alloc_ctx_trace : ctx_trace EAlloc
+  | load_ctx_trace : ctx_trace ELoad
+  | store_l_ctx_trace e : ctx_trace (fun x => EStore x e)
+  | store_r_ctx_trace v : ctx_trace (EStore (EVal v))
+  | free_ctx_trace : ctx_trace EFree
+  | lock_ctx_trace : ctx_trace ELock
+  | unlock_ctx_trace : ctx_trace EUnlock.
 
-Inductive h_ctx : (expr -> expr) -> Prop :=
-  | h_id_ctx : h_ctx (fun x => x)
-  | h_compose_ctx k1 k2 : h_ctx1 k1 -> h_ctx k2 -> h_ctx (fun x => k1 (k2 x)).
+Global Hint Constructors ctx_trace : context.
 
-Lemma single_h_ctx k : h_ctx1 k -> h_ctx k.
-Proof.
-  intro Hk. apply h_compose_ctx; [done | constructor].
-Qed.
+Inductive step_trace : expr -> heap -> expr -> heap -> option event -> Prop :=
+  | do_head_step_trace e h e' h' (b : option base_event) :
+      head_step_trace e h e' h' b ->
+      step_trace e h e' h' (option_map Base b)
+  | ctx_step_trace k e h e' h' (b : option event) :
+      ctx_trace k ->
+      step_trace e h e' h' b ->
+      step_trace (k e) h (k e') h' b
+  | par_l_step_trace e1 e2 h e1' h' (b : option event) :
+      step_trace e1 h e1' h' b ->
+      step_trace (EPar e1 e2) h (EPar e1' e2) h' (option_map Left b)
+  | par_r_step_trace e1 e2 h e2' h' (b : option event) :
+      step_trace e2 h e2' h' b ->
+      step_trace (EPar e1 e2) h (EPar e1 e2') h' (option_map Right b).
 
-Global Hint Resolve single_h_ctx : context.
-Global Hint Constructors h_ctx1 : context.
-Global Hint Constructors h_ctx : context.
-
-Ltac inv_ctx := repeat
-  match goal with
-  | H : ctx1 _ |- _ => inv H; try done
-  | H : ctx _ |- _ => inv H; try done
+Definition unleft (e : event) : option event :=
+  match e with
+  | Left b => Some b
+  | _ => None
   end.
 
-Lemma h_context_Eval k e v :
-  ctx k ->
-  k e = EVal v ->
-  k = (fun x => x) /\ e = EVal v.
-Proof.
-  intros Hk. induction Hk; [done|].
-  intros Hk12. inv H.
-Qed.
+Lemma head_step_trace_some e h e' h' (b : base_event) :
+  head_step_trace e h e' h' (Some b) ->
+  step_trace e h e' h' (Some (Base b)).
+Proof. intros. by eapply do_head_step_trace in H. Qed.
 
-Inductive h_step : expr -> heap -> expr -> heap -> trace -> Prop :=
-  | do_h_head_step e h e' h' p :
-      h_head_step e h e' h' p ->
-      h_step e h e' h' p
-  | h_ctx_step k e h e' h' p :
-      h_ctx k ->
-      h_step e h e' h' p ->
-      h_step (k e) h (k e') h' p
-  | h_par_l_step e1 e2 h e1' h' p :
-      h_step e1 h e1' h' p ->
-      h_step (EPar e1 e2) h (EPar e1' e2) h' (map Left p)
-  | h_par_r_step e1 e2 h e2' h' p :
-      h_step e2 h e2' h' p ->
-      h_step (EPar e1 e2) h (EPar e1 e2') h' (map Right p).
+Lemma head_step_trace_none e h e' h' :
+  head_step_trace e h e' h' None ->
+  step_trace e h e' h' None.
+Proof. intros. by eapply do_head_step_trace in H. Qed.
 
-Inductive h_steps : expr -> heap -> expr -> heap -> trace -> Prop :=
-  | h_steps_refl e h :
-      h_steps e h e h []
-  | h_steps_step e1 h1 e2 h2 e3 h3 p1 p2 :
-      h_step e1 h1 e2 h2 p1 ->
-      h_steps e2 h2 e3 h3 p2 ->
-      h_steps e1 h1 e3 h3 (p1 ++ p2).
+Lemma par_l_step_trace_some e1 e2 h e1' h' (b : event) :
+  step_trace e1 h e1' h' (Some b) ->
+  step_trace (EPar e1 e2) h (EPar e1' e2) h' (Some (Left b)).
+Proof. intros. by eapply par_l_step_trace in H. Qed.
 
-Lemma h_step_once e e' h h' p : 
-  h_step e h e' h' p ->
-  h_steps e h e' h' p.
+Lemma par_r_step_trace_some e1 e2 h e2' h' (b : event) :
+  step_trace e2 h e2' h' (Some b) ->
+  step_trace (EPar e1 e2) h (EPar e1 e2') h' (Some (Right b)).
+Proof. intros. by eapply par_r_step_trace in H. Qed.
+
+Lemma par_l_step_trace_none e1 e2 h e1' h' :
+  step_trace e1 h e1' h' None ->
+  step_trace (EPar e1 e2) h (EPar e1' e2) h' None.
+Proof. intros. by eapply par_l_step_trace in H. Qed.
+
+Lemma par_r_step_trace_none e1 e2 h e2' h' :
+  step_trace e2 h e2' h' None ->
+  step_trace (EPar e1 e2) h (EPar e1 e2') h' None.
+Proof. intros. by eapply par_r_step_trace in H. Qed.
+
+Inductive steps_trace : expr -> heap -> expr -> heap -> trace -> Prop :=
+  | steps_refl_trace e h :
+      steps_trace e h e h []
+  | steps_step_none e1 h1 e2 h2 e3 h3 (t : trace) :
+      step_trace e1 h1 e2 h2 None ->
+      steps_trace e2 h2 e3 h3 t ->
+      steps_trace e1 h1 e3 h3 t
+  | steps_step_some e1 h1 e2 h2 e3 h3 (b : event) (t : trace) :
+      step_trace e1 h1 e2 h2 (Some b) ->
+      steps_trace e2 h2 e3 h3 t ->
+      steps_trace e1 h1 e3 h3 (b :: t).
+
+Create HintDb step_trace.
+Global Hint Constructors steps_trace : step_trace.
+Global Hint Constructors head_step_trace : step_trace.
+Global Hint Constructors pure_step_trace : step_trace.
+Global Hint Resolve head_step_trace_some : step_trace.
+Global Hint Resolve head_step_trace_none : step_trace.
+Global Hint Resolve par_l_step_trace_some : step_trace.
+Global Hint Resolve par_r_step_trace_some : step_trace.
+Global Hint Resolve par_l_step_trace_none : step_trace.
+Global Hint Resolve par_r_step_trace_none : step_trace.
+
+
+Lemma step_once_none e e' h h' : 
+  step_trace e h e' h' None ->
+  steps_trace e h e' h' [].
 Proof.
   intros Hstep.
-  rewrite <- app_nil_r.
-  eapply h_steps_step;
-  [done | apply h_steps_refl].
+  eauto using steps_trace.
 Qed.
 
-Lemma h_steps_context_steps e e' h h' k p :
-  h_ctx k ->
-  h_steps e h e' h' p ->
-  h_steps (k e) h (k e') h' p.
+Lemma steps_once_some e e' h h' (b : event) :
+  step_trace e h e' h' (Some b) ->
+  steps_trace e h e' h' [b].
+Proof.
+  intros Hstep.
+  eauto using steps_trace.
+Qed.
+
+Lemma steps_context_steps e e' h h' k (t : trace) :
+  ctx_trace k ->
+  steps_trace e h e' h' t ->
+  steps_trace (k e) h (k e') h' t.
 Proof.
   intros Hctx Hsteps.
-  induction Hsteps; [apply h_steps_refl|].
-  eapply h_steps_step; [|done].
-  apply h_ctx_step; eauto with context.
+  induction Hsteps;
+  eauto using steps_trace, step_trace.
 Qed.
 
-Lemma h_steps_trans e e' e'' h h' h'' p p' :
-  h_steps e h e' h' p ->
-  h_steps e' h' e'' h'' p' ->
-  h_steps e h e'' h'' (p ++ p').
+Lemma steps_trans e e' e'' h h' h'' (t t' : trace) :
+  steps_trace e h e' h' t ->
+  steps_trace e' h' e'' h'' t' ->
+  steps_trace e h e'' h'' (t ++ t').
 Proof.
-  intros H. revert p'.
-  induction H; [done|].
-  intros p' H'.
-  rewrite <- app_assoc.
-  eauto using h_steps_step, app_assoc.
+  intros H. revert t'.
+  induction H; [done | |]; intros t' H';
+  eauto using steps_trace.
 Qed.
 
 Definition event_in_trace (s : event) (p : trace) : Prop :=
@@ -361,43 +433,417 @@ Definition event_in_trace (s : event) (p : trace) : Prop :=
 Print Permutation.
 
 Inductive can_swap : event -> event -> Prop :=
-  | left_right_swap e1 e2 :
-      can_swap (Left e1) (Right e2)
-  | left_left_swap e1 e2 :
-      can_swap e1 e2 ->
-      can_swap (Left e1) (Left e2)
-  | right_right_swap e1 e2 :
-      can_swap e1 e2 ->
-      can_swap (Right e1) (Right e2).
+  | left_right_swap e e' :
+      can_swap (Left e) (Right e')
+  | right_left_swap e e' :
+      can_swap (Right e) (Left e')
+  | left_left_swap e e' :
+      can_swap e e' ->
+      can_swap (Left e) (Left e')
+  | right_right_swap e e' :
+      can_swap e e' ->
+      can_swap (Right e) (Right e').
 
-Print Permutation.
+Lemma can_swap_symm e e' :  
+  can_swap e e' ->
+  can_swap e' e.
+Proof.
+  intros Hswap.
+  induction Hswap; 
+  eauto using can_swap.
+Qed.
+
+Lemma can_swap_irreflexive e :
+  ¬ can_swap e e.
+Proof.
+  intros Hswap.
+  induction e; inv Hswap; eauto.
+Qed.
+
+Inductive perm1 : trace -> trace -> Prop :=
+  | perm_refl t :
+      perm1 t t
+  | perm_skip x t t' :
+      perm1 t t' ->
+      perm1 (x :: t) (x :: t')
+  | perm_swap x y t :
+      can_swap x y ->
+      perm1 (x :: y :: t) (y :: x :: t).
 
 Inductive perm : trace -> trace -> Prop :=
-  | perm_nil :
-      perm [] []
-  | perm_skip x l l' :
-      perm l l' ->
-      perm (x :: l) (x :: l')
-  | perm_swap x y l :
-      can_swap x y ->
-      perm (x :: y :: l) (y :: x :: l)
-  | perm_trans l l' l'' :
-      perm l l' ->
-      perm l' l'' ->
-      perm l l''.
+  | perm_single t t' :
+      perm1 t t' ->
+      perm t t'
+  | perm_trans1 t t' t'' : 
+      perm1 t t' ->
+      perm t' t'' ->
+      perm t t''.
 
-(* Active locks, the locks that are currently locked *)
-(*Fixpoint alocks (p : trace) : list val :=
+Create HintDb perm.
+Global Hint Constructors perm1 : perm.
+Global Hint Constructors perm : perm.
+
+Lemma perm_trans t t' t'' :
+  perm t t' ->
+  perm t' t'' ->
+  perm t t''.
+Proof.
+  intros Hperm Hperm'.
+  induction Hperm;
+  eauto with perm.
+Qed.
+
+Lemma perm1_symm t t' :
+  perm1 t t' ->
+  perm1 t' t.
+Proof.
+  intros Hperm.
+  induction Hperm;
+  eauto using perm1, can_swap_symm.
+Qed.
+
+Lemma perm_symm t t' :
+  perm t t' ->
+  perm t' t.
+Proof.
+  intros Hperm.
+  induction Hperm.
+  - eauto using perm1_symm with perm.
+  - apply perm1_symm in H.
+    eapply perm_trans; [done|].
+    by eapply perm_single.
+Qed.
+
+Lemma perm1_nil_is_nil t :
+  perm1 [] t ->
+  t = [].
+Proof.
+  intros Hperm.
+  by inv Hperm.
+Qed.
+
+Lemma perm_nil_is_nil t :
+  perm [] t ->
+  t = [].
+Proof.
+  intros Hperm.
+  remember [] as t' in Hperm.
+  induction Hperm.
+  - rewrite Heqt' in H.
+    by apply perm1_nil_is_nil.
+  - simplify_eq.
+    apply IHHperm.
+    by apply perm1_nil_is_nil in H.
+Qed.
+
+Lemma perm1_singleton_is_singleton b t :
+  perm1 [b] t ->
+  t = [b].
+Proof.
+  intros Hperm.
+  inv Hperm;
+  by try rewrite (perm1_nil_is_nil _ H2).
+Qed.
+
+Lemma perm_singleton_is_singleton b t :
+  perm [b] t ->
+  t = [b].
+Proof.
+  intros Hperm.
+  remember [b] as t' in Hperm.
+  induction Hperm; simplify_eq.
+  - by apply perm1_singleton_is_singleton.
+  - apply IHHperm, (perm1_singleton_is_singleton _ _ H).
+Qed.
+
+Lemma perm1_app_nil t t' :
+  perm1 t (t ++ t') ->
+  t' = [].
+Proof.
+  intros Hperm. remember (t ++ t') as t0.
+  induction Hperm.
+  - rewrite <- app_nil_r in Heqt0 at 1.
+    by eapply app_inv_head.
+  - apply IHHperm.
+    rewrite <- app_comm_cons in Heqt0.
+    by simplify_eq.
+  - do 2 rewrite <- app_comm_cons in Heqt0. simplify_eq.
+    by apply can_swap_irreflexive in H.
+Qed.
+
+Lemma perm1_length t t' :
+  perm1 t t' ->
+  List.length t = List.length t'.
+Proof.
+  intros Hperm.
+  induction Hperm; try done.
+  simpl. by f_equal.
+Qed.
+
+Lemma perm_length t t' :
+  perm t t' ->
+  List.length t = List.length t'.
+Proof.
+  intros Hperm. induction Hperm; [by apply perm1_length|].
+  rewrite <- IHHperm. by apply perm1_length.
+Qed.
+
+Lemma perm_app_nil t t' :
+  perm t (t ++ t') ->
+  t' = [].
+Proof.
+  intros Hperm.
+  apply length_zero_iff_nil.
+  apply perm_length in Hperm.
+  rewrite app_length in Hperm.
+  lia.
+Qed.
+
+Lemma perm1_skip_or_swap a b a' b' t t' : 
+  perm1 (a :: b :: t) (a' :: b' :: t') ->
+  (a = a' /\ perm1 (b :: t) (b' :: t')) \/
+  (a = b' /\ b = a' /\ t = t' /\ can_swap a b).
+Proof.
+  intros Hperm.
+  inv Hperm; eauto with perm.
+Qed.
+
+Lemma perm1_inv a t t' :
+  perm1 (a :: t) (a :: t') ->
+  perm1 t t'.
+Proof.
+  intros Hperm.
+  inv Hperm;
+  by try apply perm_refl.
+Qed.
+
+Lemma perm1_app_inv t t0 t1 :
+  perm1 (t ++ t0) (t ++ t1) ->
+  perm1 t0 t1.
+Proof.
+  intros Hperm.
+  induction t; [auto|].
+  eapply IHt, perm1_inv.
+  by do 2 rewrite app_comm_cons.
+Qed.
+
+Lemma perm_app_inv t t0 t1 :
+  perm (t ++ t0) (t ++ t1) ->
+  perm t0 t1.
+Proof.
+  revert t t1. induction t0.
+  - intros t t1 Hperm.
+    rewrite app_nil_r in Hperm.
+    apply perm_app_nil in Hperm. simplify_eq.
+    eauto with perm.
+  - intros t t1 Hperm.
+    
+Admitted.
+
+(*
+Lemma perm_app_inv t t0 t1 :
+  perm (t ++ t0) (t ++ t1) ->
+  perm t0 t1.
+Proof.
+  intros Hperm.
+  remember (t ++ t0) as t0'.
+  remember (t ++ t1) as t1'.
+  induction Hperm; simplify_eq.
+  - by eapply perm_single, perm1_app_inv.
+  - admit.
+Admitted.
+*)
+
+Lemma perm_middle a t t' :
+  perm t (a :: t') ->
+  exists t1 t2,
+    t = t1 ++ a :: t2 /\
+    perm (t1 ++ t2) t' /\
+    Forall (can_swap a) t1.
+Proof.
+Admitted.
+
+Lemma perm_inv a t t' :
+  perm (a :: t) (a :: t') ->
+  perm t t'.
+Proof.
+  revert a t'. induction t; intros a' t' Hperm.
+  - apply perm_singleton_is_singleton in Hperm.
+    simplify_eq. eauto with perm.
+  - admit.
+Restart.
+  intros Hperm.
+  inv Hperm.
+  - by eapply perm_single, perm1_inv.
+  - admit.
+Admitted.
+
+Lemma perm1_s_eq x t1 t2 t1' t2' :
+  t1 ++ x :: t2 = t1' ++ x :: t2' ->
+  Forall (can_swap x) t1 ->
+  Forall (can_swap x) t1' ->
+  perm (t1 ++ t2) (t1' ++ t2').
+Admitted.
+
+Lemma perm1_s x t1 t2 t1' t2' :
+  perm1 (t1 ++ x :: t2) (t1' ++ x :: t2') ->
+  Forall (can_swap x) t1 ->
+  Forall (can_swap x) t1' ->
+  perm (t1 ++ t2) (t1' ++ t2').
+Proof.
+  intros Hperm.
+  remember (t1 ++ x :: t2) as k.
+  remember (t1' ++ x :: t2') as k'.
+  revert Heqk Heqk'. revert t1 t1'.
+  induction Hperm; intros t1 t1' Heqk Heqk' Hswap Hswap'; simplify_eq.
+  - admit.
+  - Admitted.
+
+Lemma steps_perm e h e' h' (t t' : trace) :
+  perm t t' ->
+  steps_trace e h e' h' t ->
+  steps_trace e h e' h' t'.
+Proof.
+  intros Hperm Hsteps. revert t' Hperm.
+  induction Hsteps; intros t' Hperm.
+  - rewrite (perm_nil_is_nil _ Hperm).
+    apply steps_refl_trace.
+  - eapply steps_step_none; by [|apply IHHsteps].
+  - revert H Hsteps IHHsteps. revert e1 h1 e2 h2 e3 h3. induction t'.
+    { by apply perm_symm, perm_nil_is_nil in Hperm. }
+    intros e1 h1 e2 h2 e3 h3 Hstep Hsteps IH.
+    destruct (event_eq_dec a b).
+    + simplify_eq. admit.
+    + admit.
+Admitted.
+
+Fixpoint to_base (e : event) : base_event :=
+  match e with
+  | Base b => b
+  | Left b => to_base b
+  | Right b => to_base b
+  end.
+
+Lemma left_to_base_eq (e : event) :
+  to_base (Left e) = to_base e.
+Proof. done. Qed.
+
+Lemma right_to_base_eq (e : event) :
+  to_base (Right e) = to_base e.
+Proof. done. Qed.
+
+Lemma val_eq_dec (x y : val) : {x = y} + {x ≠ y}.
+Proof.
+  decide equality.
+Restart.
+  revert y. induction x; intros y; destruct y; try auto.
+  1,5: destruct b; destruct b0; auto.
+  1,2: destruct (Nat.eq_dec n n0); [auto|];
+    right; by injection.
+  destruct (IHx1 y1); destruct (IHx2 y2);
+  simplify_eq; [auto|right..]; by injection.
+Qed.
+
+(* alocks are the active locks, the locks that are currently locked *)
+Fixpoint alocks_stateful (p : trace) (a : list val) : list val :=
   match p with
-  | [] => []
-  | (Lock l) :: p' =>
-      match event_in_trace (Unlock l) p' with
-      | true => alocks p'
-      | false => l :: alocks p'
+  | [] => a
+  | e :: p' =>
+      match to_base e with
+      | Lock l => alocks_stateful p' (l :: a)
+      | Unlock l => alocks_stateful p' (remove val_eq_dec l a)
+      | Join => alocks_stateful p' a
       end
-  | _ :: p' => alocks p'
-  end.*)
-(* Definition incorrect, see notes *)
+  end.
 
+Definition alocks (p : trace) : list val := alocks_stateful p [].
 
+(* the thread is the combination of left/right of an event,
+   represented as a list of bools *)
+Fixpoint thread_stateful (e : event) (a : list bool) : list bool :=
+  match e with
+  | Base _ => a
+  | Left b => thread_stateful b (a ++ [false])
+  | Right b => thread_stateful b (a ++ [true])
+  end.
 
+Definition thread (e : event) : list bool := thread_stateful e [].
+
+Print ifdec.
+
+Fixpoint is_prefix (l l' : list bool) : bool :=
+  match l, l' with
+  | [], _ => true
+  | _, [] => false
+  | (b :: r), (b' :: r') => andb (Bool.eqb b b') (is_prefix r r')
+  end.
+
+Definition is_parent_or_child (tid tid' : list bool) : bool :=
+  orb (is_prefix tid tid') (is_prefix tid' tid).
+
+(* next events are events that could be scheduled next *)
+(* they are the first instruction of a thread that is running concurrently *)
+
+Print existsb.
+
+Fixpoint next_events_stateful
+  (p : trace) (n : list base_event) (u : list (list bool)) : list base_event :=
+  match p with
+  | [] => n
+  | e :: p' =>
+      if existsb (is_parent_or_child (thread e)) u
+        then (next_events_stateful p' n (thread e :: u))
+        else (next_events_stateful p' (to_base e :: n) (thread e :: u))
+  end.
+
+Definition next_events (p : trace) : list base_event :=
+  next_events_stateful p [] [].
+
+Fixpoint active (tid : list bool) (t : trace) : Prop :=
+  match t with
+  | [] => False
+  | e :: t' => thread e = tid ∨
+      (¬ is_prefix (thread e) tid ∧ ¬ is_prefix tid (thread e) ∧ active tid t')
+  end.
+
+Definition example_program : expr :=
+  EPar (EPar (ELock (EVal (VRef 0))) (ELock (EVal (VRef 1))))
+       (EPar (ELock (EVal (VRef 2))) (ELock (EVal (VRef 3)))).
+
+Example threading_example :
+  steps_trace
+    example_program ∅
+    (EVal (VPair (VPair VUnit VUnit) (VPair VUnit VUnit))) ∅
+    [Left (Left (Base (Lock (VRef 0))));
+     Left (Right (Base (Lock (VRef 1))));
+     Left (Base Join);
+     Right (Left (Base (Lock (VRef 2))));
+     Right (Right (Base (Lock (VRef 3))));
+     Right (Base Join);
+     Base Join].
+Proof. eauto 28 with step_trace. Qed.
+
+Example active_example (b1 b2 : base_event) :
+  active [true; false] [Left (Base b1); Right (Left (Base b2))].
+Proof.
+  compute. right. split; [|split]; tauto.
+Qed.
+
+(* Checks wether, given a list of active locks, a base event is locking,
+   meaning that a Lock instruction is trying to get a lock that is locked,
+   or that an Unlock instruction is trying to release a lock that is unlocked *)
+Definition is_locking (al : list val) (e : base_event) : Prop :=
+  match e with
+  | Lock l => In l al
+  | Unlock l => ~In l al
+  | Join => False
+  end.
+
+Definition deadlock (t : trace) : Prop :=
+  ∃ (ph pt : trace), perm t (ph ++ pt) ∧
+      Forall (is_locking (alocks ph)) (next_events pt).
+
+Theorem trace_soundness (e e' : expr) h h' (t : trace) :
+ steps_trace e h e' h' t /\ deadlock t ->
+  stuck e h.
+Proof. Admitted.

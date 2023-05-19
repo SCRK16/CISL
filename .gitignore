@@ -4,6 +4,7 @@
 *.vok
 *.vos
 *.aux
+*.cache
 .DS_Store
 #*#
 *.v#
