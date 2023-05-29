@@ -4,6 +4,7 @@ From Coq Require Import Program.Equality.
 From Coq Require Import Bool.DecBool.
 From iris.proofmode Require Import tactics.
 Require Import Lang.
+Require Import perm.
 
 Definition imm_stuck (e : expr) (h : heap) :=
   ¬ is_val e /\ forall e' h', ¬ step e h e' h'.
@@ -207,36 +208,7 @@ Admitted.
    the events that have happened during the execution of the program
 *)
 
-Inductive base_event :=
-  | Lock : val -> base_event
-  | Unlock : val -> base_event
-  | Join : base_event.
 
-Inductive event :=
-  | Base : base_event -> event
-  | Left : event -> event
-  | Right : event -> event.
-
-Lemma base_event_eq_dec (a b : base_event) :
-  a = b \/ a ≠ b.
-Proof.
-  destruct a; destruct b; eauto;
-  destruct (val_eq_dec v v0);
-  try (left; by f_equal);
-  right; intros Heq; simplify_eq.
-Qed.
-
-Lemma event_eq_dec (a b : event) :
-  a = b \/ a ≠ b.
-Proof.
-  dependent induction a;
-  [destruct b0 | destruct b..]; eauto;
-  [destruct (base_event_eq_dec b0 b) | destruct (IHa b)..];
-  try (left; by f_equal);
-  right; intros Heq; simplify_eq.
-Qed.
-
-Definition trace : Type := list event.
 
 Inductive pure_step_trace : expr -> expr -> option base_event -> Prop :=
   | Amb_step_trace n :
@@ -430,275 +402,6 @@ Qed.
 Definition event_in_trace (s : event) (p : trace) : Prop :=
   Exists (eq s) p.
 
-Print Permutation.
-
-Inductive can_swap : event -> event -> Prop :=
-  | left_right_swap e e' :
-      can_swap (Left e) (Right e')
-  | right_left_swap e e' :
-      can_swap (Right e) (Left e')
-  | left_left_swap e e' :
-      can_swap e e' ->
-      can_swap (Left e) (Left e')
-  | right_right_swap e e' :
-      can_swap e e' ->
-      can_swap (Right e) (Right e').
-
-Lemma can_swap_symm e e' :  
-  can_swap e e' ->
-  can_swap e' e.
-Proof.
-  intros Hswap.
-  induction Hswap; 
-  eauto using can_swap.
-Qed.
-
-Lemma can_swap_irreflexive e :
-  ¬ can_swap e e.
-Proof.
-  intros Hswap.
-  induction e; inv Hswap; eauto.
-Qed.
-
-Inductive perm1 : trace -> trace -> Prop :=
-  | perm_refl t :
-      perm1 t t
-  | perm_skip x t t' :
-      perm1 t t' ->
-      perm1 (x :: t) (x :: t')
-  | perm_swap x y t :
-      can_swap x y ->
-      perm1 (x :: y :: t) (y :: x :: t).
-
-Inductive perm : trace -> trace -> Prop :=
-  | perm_single t t' :
-      perm1 t t' ->
-      perm t t'
-  | perm_trans1 t t' t'' : 
-      perm1 t t' ->
-      perm t' t'' ->
-      perm t t''.
-
-Create HintDb perm.
-Global Hint Constructors perm1 : perm.
-Global Hint Constructors perm : perm.
-
-Lemma perm_trans t t' t'' :
-  perm t t' ->
-  perm t' t'' ->
-  perm t t''.
-Proof.
-  intros Hperm Hperm'.
-  induction Hperm;
-  eauto with perm.
-Qed.
-
-Lemma perm1_symm t t' :
-  perm1 t t' ->
-  perm1 t' t.
-Proof.
-  intros Hperm.
-  induction Hperm;
-  eauto using perm1, can_swap_symm.
-Qed.
-
-Lemma perm_symm t t' :
-  perm t t' ->
-  perm t' t.
-Proof.
-  intros Hperm.
-  induction Hperm.
-  - eauto using perm1_symm with perm.
-  - apply perm1_symm in H.
-    eapply perm_trans; [done|].
-    by eapply perm_single.
-Qed.
-
-Lemma perm1_nil_is_nil t :
-  perm1 [] t ->
-  t = [].
-Proof.
-  intros Hperm.
-  by inv Hperm.
-Qed.
-
-Lemma perm_nil_is_nil t :
-  perm [] t ->
-  t = [].
-Proof.
-  intros Hperm.
-  remember [] as t' in Hperm.
-  induction Hperm.
-  - rewrite Heqt' in H.
-    by apply perm1_nil_is_nil.
-  - simplify_eq.
-    apply IHHperm.
-    by apply perm1_nil_is_nil in H.
-Qed.
-
-Lemma perm1_singleton_is_singleton b t :
-  perm1 [b] t ->
-  t = [b].
-Proof.
-  intros Hperm.
-  inv Hperm;
-  by try rewrite (perm1_nil_is_nil _ H2).
-Qed.
-
-Lemma perm_singleton_is_singleton b t :
-  perm [b] t ->
-  t = [b].
-Proof.
-  intros Hperm.
-  remember [b] as t' in Hperm.
-  induction Hperm; simplify_eq.
-  - by apply perm1_singleton_is_singleton.
-  - apply IHHperm, (perm1_singleton_is_singleton _ _ H).
-Qed.
-
-Lemma perm1_app_nil t t' :
-  perm1 t (t ++ t') ->
-  t' = [].
-Proof.
-  intros Hperm. remember (t ++ t') as t0.
-  induction Hperm.
-  - rewrite <- app_nil_r in Heqt0 at 1.
-    by eapply app_inv_head.
-  - apply IHHperm.
-    rewrite <- app_comm_cons in Heqt0.
-    by simplify_eq.
-  - do 2 rewrite <- app_comm_cons in Heqt0. simplify_eq.
-    by apply can_swap_irreflexive in H.
-Qed.
-
-Lemma perm1_length t t' :
-  perm1 t t' ->
-  List.length t = List.length t'.
-Proof.
-  intros Hperm.
-  induction Hperm; try done.
-  simpl. by f_equal.
-Qed.
-
-Lemma perm_length t t' :
-  perm t t' ->
-  List.length t = List.length t'.
-Proof.
-  intros Hperm. induction Hperm; [by apply perm1_length|].
-  rewrite <- IHHperm. by apply perm1_length.
-Qed.
-
-Lemma perm_app_nil t t' :
-  perm t (t ++ t') ->
-  t' = [].
-Proof.
-  intros Hperm.
-  apply length_zero_iff_nil.
-  apply perm_length in Hperm.
-  rewrite app_length in Hperm.
-  lia.
-Qed.
-
-Lemma perm1_skip_or_swap a b a' b' t t' : 
-  perm1 (a :: b :: t) (a' :: b' :: t') ->
-  (a = a' /\ perm1 (b :: t) (b' :: t')) \/
-  (a = b' /\ b = a' /\ t = t' /\ can_swap a b).
-Proof.
-  intros Hperm.
-  inv Hperm; eauto with perm.
-Qed.
-
-Lemma perm1_inv a t t' :
-  perm1 (a :: t) (a :: t') ->
-  perm1 t t'.
-Proof.
-  intros Hperm.
-  inv Hperm;
-  by try apply perm_refl.
-Qed.
-
-Lemma perm1_app_inv t t0 t1 :
-  perm1 (t ++ t0) (t ++ t1) ->
-  perm1 t0 t1.
-Proof.
-  intros Hperm.
-  induction t; [auto|].
-  eapply IHt, perm1_inv.
-  by do 2 rewrite app_comm_cons.
-Qed.
-
-Lemma perm_app_inv t t0 t1 :
-  perm (t ++ t0) (t ++ t1) ->
-  perm t0 t1.
-Proof.
-  revert t t1. induction t0.
-  - intros t t1 Hperm.
-    rewrite app_nil_r in Hperm.
-    apply perm_app_nil in Hperm. simplify_eq.
-    eauto with perm.
-  - intros t t1 Hperm.
-    
-Admitted.
-
-(*
-Lemma perm_app_inv t t0 t1 :
-  perm (t ++ t0) (t ++ t1) ->
-  perm t0 t1.
-Proof.
-  intros Hperm.
-  remember (t ++ t0) as t0'.
-  remember (t ++ t1) as t1'.
-  induction Hperm; simplify_eq.
-  - by eapply perm_single, perm1_app_inv.
-  - admit.
-Admitted.
-*)
-
-Lemma perm_middle a t t' :
-  perm t (a :: t') ->
-  exists t1 t2,
-    t = t1 ++ a :: t2 /\
-    perm (t1 ++ t2) t' /\
-    Forall (can_swap a) t1.
-Proof.
-Admitted.
-
-Lemma perm_inv a t t' :
-  perm (a :: t) (a :: t') ->
-  perm t t'.
-Proof.
-  revert a t'. induction t; intros a' t' Hperm.
-  - apply perm_singleton_is_singleton in Hperm.
-    simplify_eq. eauto with perm.
-  - admit.
-Restart.
-  intros Hperm.
-  inv Hperm.
-  - by eapply perm_single, perm1_inv.
-  - admit.
-Admitted.
-
-Lemma perm1_s_eq x t1 t2 t1' t2' :
-  t1 ++ x :: t2 = t1' ++ x :: t2' ->
-  Forall (can_swap x) t1 ->
-  Forall (can_swap x) t1' ->
-  perm (t1 ++ t2) (t1' ++ t2').
-Admitted.
-
-Lemma perm1_s x t1 t2 t1' t2' :
-  perm1 (t1 ++ x :: t2) (t1' ++ x :: t2') ->
-  Forall (can_swap x) t1 ->
-  Forall (can_swap x) t1' ->
-  perm (t1 ++ t2) (t1' ++ t2').
-Proof.
-  intros Hperm.
-  remember (t1 ++ x :: t2) as k.
-  remember (t1' ++ x :: t2') as k'.
-  revert Heqk Heqk'. revert t1 t1'.
-  induction Hperm; intros t1 t1' Heqk Heqk' Hswap Hswap'; simplify_eq.
-  - admit.
-  - Admitted.
-
 Lemma steps_perm e h e' h' (t t' : trace) :
   perm t t' ->
   steps_trace e h e' h' t ->
@@ -843,7 +546,12 @@ Definition deadlock (t : trace) : Prop :=
   ∃ (ph pt : trace), perm t (ph ++ pt) ∧
       Forall (is_locking (alocks ph)) (next_events pt).
 
+(* Probably needed: The expressions do not contain a heap
+    instruction that changes the locks *)
 Theorem trace_soundness (e e' : expr) h h' (t : trace) :
- steps_trace e h e' h' t /\ deadlock t ->
+  steps_trace e h e' h' t ->
+  deadlock t ->
   stuck e h.
-Proof. Admitted.
+Proof.
+  intros Hsteps Hdeadlock.
+Admitted.
