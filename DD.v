@@ -2,14 +2,14 @@ From Coq Require Export Strings.String.
 From Coq Require Import Lists.List.
 From Coq Require Import Program.Equality.
 From Coq Require Import Bool.DecBool.
-From iris.proofmode Require Import tactics.
-Require Import Lang.
 Require Import perm.
+From iris.proofmode Require Import tactics.
+From stdpp Require Import countable.
 
-Definition imm_stuck (e : expr) (h : heap) :=
+Definition imm_stuck (e : expr) (h : lock_heap) :=
   ¬ is_val e /\ forall e' h', ¬ step e h e' h'.
 
-Definition stuck (e : expr) (h : heap) := 
+Definition stuck (e : expr) (h : lock_heap) := 
   exists e' h', steps e h e' h' /\ imm_stuck e' h'.
 
 Lemma imm_stuck_par e e' h :
@@ -30,185 +30,27 @@ Proof.
       by apply do_step.
 Qed.
 
-(* Incorrecness Logic: Stuck *)
-Definition ILS (P : iProp) (e : expr) (Q : iProp) :=
-  forall h', Q h' -> exists e' h, P h /\ steps e h e' h' /\ imm_stuck e' h'.
-
-Definition ISLS (P : iProp) (e : expr) (Q : iProp) :=
-  forall R, ILS (P ∗ R)%S e (Q ∗ R)%S.
-
-Notation "[[[ P ]]] e [[[S: Q ]]]" := (ISLS P%S e Q%S)
-  (at level 20, e, P at level 200, Q at level 200, only parsing).
-
-Lemma ILS_cons (P P' Q Q' : iProp) e :
-  (P' ⊢ P)%S ->
-  (Q ⊢ Q')%S ->
-  ILS P' e Q' ->
-  ILS P e Q.
-Proof.
-  intros HP' HQ' HIL h' HQ.
-  destruct (HIL h' (HQ' h' HQ)) as (e' & h & HPh & Hsteps & Hs).
-  exists e', h. eauto.
-Qed.
-
-Lemma soundness (e : expr) (Q : iProp) :
-  [[[ emp ]]] e [[[S: Q ]]] ->
-  (exists h', Q h') ->
-  stuck e ∅.
-Proof.
-  intros HISLS [h' HQ].
-  specialize (HISLS emp%S).
-  apply ILS_cons with (P := emp%S) (Q := Q) in HISLS;
-  [ | eauto with seplogic..].
-  destruct (HISLS h' HQ) as (e' & h & Hh & Hsteps & Hs).
-  exists e', h'.
-  by inv Hh.
-Qed.
-
-Inductive seq_ctx1 : (expr -> expr) -> Prop :=
-  | Pair_l_ctx e : seq_ctx1 (fun x => EPair x e)
-  | Pair_r_ctx v : seq_ctx1 (EPair (EVal v))
-  | Fst_ctx : seq_ctx1 EFst
-  | Snd_ctx : seq_ctx1 ESnd
-  | Let_ctx y e : seq_ctx1 (fun x => ELet y x e)
-  | Op_l_ctx op e : seq_ctx1 (fun x => EOp op x e)
-  | Op_r_ctx op v : seq_ctx1 (fun x => EOp op (EVal v) x)
-  | If_ctx e1 e2 : seq_ctx1 (fun x => EIf x e1 e2)
-  | Seq_ctx e : seq_ctx1 (fun x => ESeq x e)
-  | Alloc_ctx : seq_ctx1 EAlloc
-  | Load_ctx : seq_ctx1 ELoad
-  | Store_l_ctx e : seq_ctx1 (fun x => EStore x e)
-  | Store_r_ctx v : seq_ctx1 (EStore (EVal v))
-  | Free_ctx : seq_ctx1 EFree
-  | Lock_ctx : seq_ctx1 ELock
-  | Unlock_ctx : seq_ctx1 EUnlock.
-
-Inductive seq_ctx : (expr -> expr) -> Prop :=
-  | Id_ctx : seq_ctx (fun x => x)
-  | Compose_ctx k1 k2 : seq_ctx1 k1 -> seq_ctx k2 -> seq_ctx (fun x => k1 (k2 x)).
-
-Lemma seq_ctx1_ctx1 k :
-  seq_ctx1 k -> ctx1 k.
-Proof.
-  intros Hctx.
-  inv Hctx; constructor.
-Qed.
-
-Lemma seq_ctx_ctx k :
-  seq_ctx k -> ctx k.
-Proof.
-  intros Hctx.
-  induction Hctx; constructor; [|done].
-  by apply seq_ctx1_ctx1.
-Qed.
-
-Lemma seq_ctx_eq k k' e e' :
-  ctx1 k ->
-  seq_ctx1 k' ->
-  ¬ is_val e ->
-  ¬ is_val e' ->
-  k e = k' e' ->
-  k = k' /\ e = e'.
-Proof.
-  intros Hctx Hctx' Hnval Hnval' Heq.
-  inv Hctx; inv Hctx'; try done.
-Qed.
-
-Ltac seq_ctx_not_step_tac k e := repeat
-  match goal with
-  | H : seq_ctx1 _ |- _ => inv H
-  | H : EVal _ = k e |- is_val (k e) => by rewrite <- H
-  | H : EVal _ = k e |- False => apply (not_is_val_context e k)
-  | H : seq_ctx k |- ctx k => by apply seq_ctx_ctx
-  | H : pure_step _ _ |- _ => inv H
-  | H : head_step _ _ _ _ |- _ => inv H
-  | H : _ |- _ => try done
-  end.
-
-Lemma seq_ctx_not_step k e h :
-  seq_ctx k ->
-  ¬ is_val e ->
-  (forall e' h', ¬ step e h e' h') ->
-  (forall e' h', ¬ step (k e) h e' h').
-Proof.
-  intros Hctx Hnval Hnstep e' h' Hstep.
-  inv Hstep. inv Hctx; [by eapply Hnstep |].
-  induction H0; [seq_ctx_not_step_tac k2 e|].
-  admit.
-
-(*intros Hctx. revert e. inv Hctx;
-  intros e Hnval Hnstep e' h' Hstep;
-  [by eapply Hnstep |].
-  inv Hstep. revert H1 H0 H. induction H2;
-  intros H' H0 H1.
-  - seq_ctx_not_step_tac k2 e.
-  - *)
-
-Admitted.
-
-
-
-Lemma ILS_seq_ctx (P Q : iProp) e k :
-  seq_ctx k ->
-  ILS P e Q ->
-  ILS P (k e) Q.
-Proof.
-  intros Hctx H h' HQ.
-  destruct (H h' HQ) as (e' & h & HP & Hsteps & Hnval & Hnstep).
-  exists (k e'), h. repeat split; [done | ..].
-  - apply steps_context_steps; eauto using seq_ctx_ctx.
-  - apply seq_ctx_ctx in Hctx.
-    by apply not_is_val_context.
-  - by apply seq_ctx_not_step.
-Qed.
-
-Lemma ISLS_seq_ctx (P Q : iProp) e k :
-  seq_ctx k ->
-  [[[ P ]]] e [[[S: Q ]]] ->
-  [[[ P ]]] k e [[[S: Q ]]].
-Proof.
-  intros Hctx H R.
-  by apply ILS_seq_ctx.
-Qed.
-
-Ltac iSep_mono_l_comm R :=
-  eapply (iSep_mono_l _ _ R);
-  [apply iSep_comm | by apply iSep_assoc].
-
-Lemma ILS_par (P P' Q Q' : iProp) (e e' : expr) :
-  ISLS P e Q ->
-  ISLS P' e' Q' ->
-  ISLS (P ∗ P') (EPar e e') (Q ∗ Q').
-Proof.
-  intros H H' R h HQQR.
-  assert (H0 : (Q ∗ Q' ∗ R)%S h) by (by apply iSep_assoc').
-  destruct (H (Q' ∗ R)%S h H0) as (e0 & h0 & HPQR & Hsteps & Hstuck).
-  assert (H1 : (Q' ∗ P ∗ R)%S h0).
-  { apply iSep_assoc'. iSep_mono_l_comm R. }
-  destruct (H' (P ∗ R)%S h0 H1) as (e1 & h1 & HPPR & Hsteps' & Hstuck').
-  exists (EPar e0 e1), h1. split; [|split].
-  - iSep_mono_l_comm R.
-  - eapply steps_trans.
-    + apply steps_context_steps;
-      eauto with context.
-    + apply steps_context_steps with (k := fun x => EPar x e1);
-      eauto with context.
-  - apply imm_stuck_par; [done|].
-    admit.
-Admitted.
+(***
+Goal: Proof that certain programs get stuck because of a deadlock
+Difficult with just the definition of stuck, since we need all threads
+to step in the exact correct order for the deadlock to show up, and then
+also proof that the program can not step to any other expression anymore.
+We will take a different approach: Proof that programs contain a deadlock,
+which will then imply that the program can get stuck
+***)
 
 
 (************************
         HISTORIES
 ************************)
 
-(* 
-   Define new step relation steps_trace
-   This is a step relation that also keeps track of a trace (history),
-   the events that have happened during the execution of the program
-*)
+(***
+Define new step relation steps_trace
+This is a step relation that also keeps track of a trace (history),
+the events that have happened during the execution of the program
+****)
 
-
+Notation Join := perm.Join.
 
 Inductive pure_step_trace : expr -> expr -> option base_event -> Prop :=
   | Amb_step_trace n :
@@ -235,38 +77,31 @@ Inductive pure_step_trace : expr -> expr -> option base_event -> Prop :=
   | Par_step_trace v1 v2 :
       pure_step_trace (EPar (EVal v1) (EVal v2)) (EVal (VPair v1 v2)) (Some Join).
 
-Inductive head_step_trace : expr -> heap -> expr -> heap -> option base_event -> Prop :=
+Inductive head_step_trace :
+  expr -> lock_heap ->
+  expr -> lock_heap ->
+  option base_event -> Prop :=
   | do_pure_step_trace e e' h b :
       pure_step_trace e e' b ->
       head_step_trace e h e' h b
-  | alloc_head_step_trace h v l :
-      valid_alloc h l →
+  | Newlock_head_step_trace h l :
+      l ∉ dom (gset nat) h →
       head_step_trace
-        (EAlloc (EVal v)) h
-        (EVal (VRef l)) (<[ l := (Value v) ]> h) None
-  | load_head_step_trace h v l :
-      h !! l = Some (Value v) →
-      head_step_trace
-        (ELoad (EVal (VRef l))) h
-        (EVal v) h None
-  | store_head_step_trace h v w l :
-      h !! l = Some (Value w) →
-      head_step_trace
-        (EStore (EVal (VRef l)) (EVal v)) h
-        (EVal VUnit) (<[ l := (Value v) ]> h) None
-  | free_head_step_trace h v l :
-      h !! l = Some (Value v) →
-      head_step_trace
-        (EFree (EVal (VRef l))) h
-        (EVal VUnit) (<[l := Reserved ]> h) None
-  | lock_head_step_trace h l :
+        ENewlock h
+        (EVal (VRef l)) (<[ l := false ]> h)
+        None
+  | Lock_head_step_trace h l :
+      l ∈ dom (gset nat) h ->
       head_step_trace
         (ELock (EVal (VRef l))) h
-        (EVal VUnit) h (Some (Lock (VRef l)))
-  | unlock_head_step_trace h l :
+        (EVal VUnit) (<[ l := true ]> h)
+        (Some (Lock l))
+  | Unlock_head_step_trace h l :
+      l ∈ dom (gset nat) h ->
       head_step_trace
         (EUnlock (EVal (VRef l))) h
-        (EVal VUnit) h (Some (Unlock (VRef l))).
+        (EVal VUnit) (<[ l := false ]> h)
+        (Some (Unlock l)).
 
 Inductive ctx_trace : (expr -> expr) -> Prop :=
   | pair_l_ctx_trace e : ctx_trace (fun x => EPair x e)
@@ -278,17 +113,34 @@ Inductive ctx_trace : (expr -> expr) -> Prop :=
   | op_r_ctx_trace op v : ctx_trace (fun x => EOp op (EVal v) x)
   | if_ctx_trace e1 e2 : ctx_trace (fun x => EIf x e1 e2)
   | seq_ctx_trace e : ctx_trace (fun x => ESeq x e)
-  | alloc_ctx_trace : ctx_trace EAlloc
-  | load_ctx_trace : ctx_trace ELoad
-  | store_l_ctx_trace e : ctx_trace (fun x => EStore x e)
-  | store_r_ctx_trace v : ctx_trace (EStore (EVal v))
-  | free_ctx_trace : ctx_trace EFree
   | lock_ctx_trace : ctx_trace ELock
   | unlock_ctx_trace : ctx_trace EUnlock.
 
-Global Hint Constructors ctx_trace : context.
+Lemma ctx_trace_ctx1 k :
+  ctx_trace k ->
+  ctx1 k.
+Proof.
+  intros Hctx.
+  inv Hctx; constructor.
+Qed.
 
-Inductive step_trace : expr -> heap -> expr -> heap -> option event -> Prop :=
+Lemma ctx_trace_injective k e e' :
+  ctx_trace k ->
+  k e = k e' ->
+  e = e'.
+Proof.
+  intros Hctx Hk.
+  induction Hctx;
+  injection Hk; tauto.
+Qed.
+
+Global Hint Constructors ctx_trace : context.
+Global Hint Resolve ctx_trace_ctx1 : context.
+
+Inductive step_trace :
+  expr -> lock_heap ->
+  expr -> lock_heap ->
+  option event -> Prop :=
   | do_head_step_trace e h e' h' (b : option base_event) :
       head_step_trace e h e' h' b ->
       step_trace e h e' h' (option_map Base b)
@@ -302,12 +154,6 @@ Inductive step_trace : expr -> heap -> expr -> heap -> option event -> Prop :=
   | par_r_step_trace e1 e2 h e2' h' (b : option event) :
       step_trace e2 h e2' h' b ->
       step_trace (EPar e1 e2) h (EPar e1 e2') h' (option_map Right b).
-
-Definition unleft (e : event) : option event :=
-  match e with
-  | Left b => Some b
-  | _ => None
-  end.
 
 Lemma head_step_trace_some e h e' h' (b : base_event) :
   head_step_trace e h e' h' (Some b) ->
@@ -339,7 +185,35 @@ Lemma par_r_step_trace_none e1 e2 h e2' h' :
   step_trace (EPar e1 e2) h (EPar e1 e2') h' None.
 Proof. intros. by eapply par_r_step_trace in H. Qed.
 
-Inductive steps_trace : expr -> heap -> expr -> heap -> trace -> Prop :=
+Lemma let_not_recursive s e1 e2 :
+  ¬ e2 = ELet s e1 e2.
+Proof.
+  intros H. induction e2; try done.
+  simplify_eq.
+Qed.
+
+Lemma step_trace_not_eq' e1 h1 e2 h2 t :
+  e1 = e2 ->
+  ¬ step_trace e1 h1 e2 h2 t.
+Proof.
+  intros Heq Hstep.
+  induction Hstep; simplify_eq.
+  - inv H. inv H0.
+    + induction e; try done; simpl in H2.
+      * by destruct (string_dec s y).
+      * destruct (string_dec y s); simplify_eq.
+        by eapply let_not_recursive.
+    + induction e1; try done; simplify_eq.
+    + induction e2; try done; simplify_eq.
+    + induction e; try done; simplify_eq.
+  - eauto using ctx_trace_injective.
+Qed.
+
+Lemma step_trace_not_eq e h1 h2 t :
+  ¬ step_trace e h1 e h2 t.
+Proof. by apply step_trace_not_eq'. Qed.
+
+Inductive steps_trace : expr -> lock_heap -> expr -> lock_heap -> trace -> Prop :=
   | steps_refl_trace e h :
       steps_trace e h e h []
   | steps_step_none e1 h1 e2 h2 e3 h3 (t : trace) :
@@ -352,16 +226,12 @@ Inductive steps_trace : expr -> heap -> expr -> heap -> trace -> Prop :=
       steps_trace e1 h1 e3 h3 (b :: t).
 
 Create HintDb step_trace.
-Global Hint Constructors steps_trace : step_trace.
-Global Hint Constructors head_step_trace : step_trace.
-Global Hint Constructors pure_step_trace : step_trace.
-Global Hint Resolve head_step_trace_some : step_trace.
-Global Hint Resolve head_step_trace_none : step_trace.
-Global Hint Resolve par_l_step_trace_some : step_trace.
-Global Hint Resolve par_r_step_trace_some : step_trace.
-Global Hint Resolve par_l_step_trace_none : step_trace.
-Global Hint Resolve par_r_step_trace_none : step_trace.
-
+Global Hint Constructors
+  steps_trace head_step_trace pure_step_trace : step_trace.
+Global Hint Resolve
+  head_step_trace_some  head_step_trace_none
+  par_l_step_trace_some par_r_step_trace_some
+  par_l_step_trace_none par_r_step_trace_none : step_trace.
 
 Lemma step_once_none e e' h h' : 
   step_trace e h e' h' None ->
@@ -371,7 +241,7 @@ Proof.
   eauto using steps_trace.
 Qed.
 
-Lemma steps_once_some e e' h h' (b : event) :
+Lemma step_once_some e e' h h' (b : event) :
   step_trace e h e' h' (Some b) ->
   steps_trace e h e' h' [b].
 Proof.
@@ -399,26 +269,185 @@ Proof.
   eauto using steps_trace.
 Qed.
 
-Definition event_in_trace (s : event) (p : trace) : Prop :=
-  Exists (eq s) p.
+Lemma steps_trans' e e' e'' h h' h'' (t t' t'' : trace) :
+  steps_trace e h e' h' t ->
+  steps_trace e' h' e'' h'' t' ->
+  t ++ t' = t'' ->
+  steps_trace e h e'' h'' t''.
+Proof.
+  intros Hsteps Hsteps' <-.
+  by eapply steps_trans.
+Qed.
+
+Lemma steps_split e e'' h h'' (t t' : trace) :
+  steps_trace e h e'' h'' (t ++ t') ->
+  exists e' h',
+    steps_trace e h e' h' t /\
+    steps_trace e' h' e'' h'' t'.
+Proof.
+  intros Hsteps. remember (t ++ t') as tt'. revert t t' Heqtt'.
+  induction Hsteps; intros t' t'' Heqtt'.
+  - symmetry in Heqtt'. apply app_eq_nil in Heqtt' as [-> ->].
+    exists e, h. eauto with step_trace.
+  - destruct (IHHsteps _ _ Heqtt') as (e' & h' & Hfst & Hsnd).
+    exists e', h'. split; [|done].
+    by eapply steps_step_none.
+  - destruct t'; simpl in *; simplify_eq.
+    + exists e1, h1. split; [constructor|].
+      by eapply steps_step_some.
+    + destruct (IHHsteps _ _ eq_refl) as (e' & h' & Hfst & Hsnd).
+      exists e', h'. split; [|done].
+      by eapply steps_step_some.
+Qed.
+
+Lemma steps_swap {e h e' h' x y} :
+  can_swap x y ->
+  steps_trace e h e' h' [y; x] ->
+  exists h'', steps_trace e h e' h'' [x; y].
+Proof. Admitted.
+(* steps_swap is false, since the following program doesn't allow swaps *)
+
+Definition steps_swap_false l l' :=
+  (EPar (ELock (EVal (VRef l'))) (ESeq (ELock (EVal (VRef l))) (ENewlock))).
+
+Check ({[ 0 := false; 1 := false]}) : lock_heap.
+
+Lemma contradiction : False.
+Proof.
+  assert (
+    steps_trace
+      (steps_swap_false 0 1) {[0 := false]}
+      (EPar (EVal VUnit) (EVal (VRef 1))) {[1 := true; 0 := true]}
+      [Right (Base (Lock 0)); Left (Base (Lock 1))]).
+  { unfold steps_swap_false. eapply steps_step_some. {
+    apply par_r_step_trace_some.
+    apply ctx_step_trace with (k := fun x => ESeq x _); eauto with context.
+    apply head_step_trace_some.
+    by constructor. } rewrite insert_singleton.
+    eapply steps_step_none. {
+    apply par_r_step_trace_none, head_step_trace_none. repeat constructor. }
+    eapply steps_step_none. {
+    apply par_r_step_trace_none, head_step_trace_none.
+    by apply Newlock_head_step_trace with (l := 1). }
+    eapply steps_step_some. {
+    apply par_l_step_trace_some, head_step_trace_some.
+    by constructor. } rewrite insert_insert. apply steps_refl_trace.
+  } unfold steps_swap_false in H.
+  apply steps_swap in H; [|constructor].
+  destruct H as [h'' H]. inv H.
+  - inv H0.
+    + inv H6. inv H0.
+    + inv H2.
+    + inv H6.
+      * inv H. inv H0.
+      * inv H0. inv H2.
+        -- inv H. inv H0.
+        -- inv H0.
+    + inv H6.
+      * inv H. inv H0.
+      * inv H0. inv H2.
+        -- inv H. inv H0.
+        -- inv H0. inv H3.
+           ++ inv H. inv H0.
+           ++ inv H0.
+  - inv H6.
+    + inv H4. inv H0.
+    + inv H0.
+    + inv H4.
+      * inv H.
+        -- inv H0.
+        -- discriminate. (* The crucial step *)
+      * inv H0. inv H1.
+        -- inv H. inv H0.
+        -- inv H0.
+    + destruct b; done.
+Qed.
+
+Lemma step_trace_heap_indifferent {e1 h1 h1' e2 h2 t} :
+  dom (gset nat) h1 = dom (gset nat) h1' ->
+  step_trace e1 h1 e2 h2 t ->
+  exists h2', step_trace e1 h1' e2 h2' t.
+Proof.
+  intros Hdom Hstep.
+  induction Hstep.
+  - inversion H; [|rewrite Hdom in H0..]; simplify_eq.
+    + exists h1'. by do 2 constructor.
+    + eexists. constructor. by apply Newlock_head_step_trace.
+    + eexists. constructor. by apply Lock_head_step_trace.
+    + eexists. constructor. by apply Unlock_head_step_trace.
+  - destruct (IHHstep Hdom) as [h2' IH].
+    eexists; by constructor.
+  - destruct (IHHstep Hdom) as [h2' IH].
+    eexists; by constructor.
+  - destruct (IHHstep Hdom) as [h2' IH].
+    eexists; by constructor.
+Qed.
+
+Lemma step_trace_dom_eq {e0 h0 e1 h1 h1' t t'} :
+  steps_trace e0 h0 e1 h1 t ->
+  steps_trace e0 h0 e1 h1' t' ->
+  dom (gset nat) h1 = dom (gset nat) h1'.
+Proof. Admitted.
+
+Lemma steps_trace_heap_indifferent {e0 h0 e1 h1 h1' e2 h2 t0 t0' t1} :
+  steps_trace e0 h0 e1 h1 t0 ->
+  steps_trace e0 h0 e1 h1' t0' ->
+  steps_trace e1 h1 e2 h2 t1 ->
+  exists h2', steps_trace e1 h1' e2 h2' t1.
+Proof.
+  intros Hsteps1 Hsteps1' Hsteps2.
+  revert e0 h0 h1' t0 t0' Hsteps1 Hsteps1'.
+  induction Hsteps2;
+  intros e0 h0 h1' t0 t0' Hsteps1 Hsteps1'.
+  - exists h1'. constructor.
+  - assert (dom (gset nat) h1 = dom (gset nat) h1');
+    [by eapply step_trace_dom_eq|].
+    destruct (step_trace_heap_indifferent H0 H) as [h2' H'].
+    destruct (IHHsteps2 e0 h0 h2' (t0 ++ []) (t0' ++ [])) as [h3' Hsteps3].
+    + eapply steps_trans; [done|]. by apply step_once_none.
+    + eapply steps_trans; [done|]. by apply step_once_none.
+    + exists h3'. replace t with ([] ++ t) by reflexivity.
+      eapply steps_trans; [|done]. by apply step_once_none.
+  - assert (dom (gset nat) h1 = dom (gset nat) h1');
+    [by eapply step_trace_dom_eq|].
+    destruct (step_trace_heap_indifferent H0 H) as [h2' H'].
+    edestruct (IHHsteps2 e0 h0 h2') as [h3' Hsteps3].
+    + eapply steps_trans; [apply Hsteps1|]. by apply step_once_some.
+    + eapply steps_trans; [done|]. by apply step_once_some.
+    + exists h3'. replace (b :: t) with ([b] ++ t) by reflexivity.
+      eapply steps_trans; [|done]. by apply step_once_some.
+Qed.
 
 Lemma steps_perm e h e' h' (t t' : trace) :
   perm t t' ->
   steps_trace e h e' h' t ->
-  steps_trace e h e' h' t'.
+  exists h'', steps_trace e h e' h'' t'.
 Proof.
-  intros Hperm Hsteps. revert t' Hperm.
-  induction Hsteps; intros t' Hperm.
-  - rewrite (perm_nil_is_nil _ Hperm).
-    apply steps_refl_trace.
-  - eapply steps_step_none; by [|apply IHHsteps].
-  - revert H Hsteps IHHsteps. revert e1 h1 e2 h2 e3 h3. induction t'.
-    { by apply perm_symm, perm_nil_is_nil in Hperm. }
-    intros e1 h1 e2 h2 e3 h3 Hstep Hsteps IH.
-    destruct (event_eq_dec a b).
-    + simplify_eq. admit.
-    + admit.
-Admitted.
+  intros Hperm. revert t t' Hperm e h e' h'.
+  refine (perm.perm_ind_bis _ _ _ _ _).
+  - intros t e h e' h' Hsteps.
+    by exists h'.
+  - intros x t t' Hperm IH e h e' h' Hsteps.
+    replace (x :: t) with ([x] ++ t) in Hsteps by reflexivity.
+    replace (x :: t') with ([x] ++ t') by reflexivity.
+    destruct (steps_split _ _ _ _ _ _ Hsteps) as (e1 & h1 & Hstep1 & Hstep2).
+    destruct (IH _ _ _ _ Hstep2) as [h'' Hsteps''].
+    exists h''. by eapply steps_trans.
+  - intros x y t t' Hswap Hperm1 IH e h e' h' Hsteps.
+    replace (y :: x :: t) with ([y; x] ++ t) in Hsteps by reflexivity.
+    replace (x :: y :: t') with ([x; y] ++ t') by reflexivity.
+    destruct (steps_split _ _ _ _ _ _ Hsteps) as (e1 & h1 & Hsteps1 & Hsteps2).
+    destruct (steps_swap Hswap Hsteps1) as [h1' Hsteps1'].
+    destruct (steps_trace_heap_indifferent Hsteps1 Hsteps1' Hsteps2) as (h3 & Hsteps3).
+    destruct (IH _ _ _ _ Hsteps3) as (h4 & Hsteps4).
+    exists h4. by eapply steps_trans.
+  - intros t t' t'' Hperm IH Hperm' IH' e h e' h' Hsteps.
+    edestruct IH; [done|].
+    edestruct IH'; [done|].
+    by eexists.
+Qed.
+
+Check perm_ind_bis.
 
 Fixpoint to_base (e : event) : base_event :=
   match e with
@@ -435,31 +464,51 @@ Lemma right_to_base_eq (e : event) :
   to_base (Right e) = to_base e.
 Proof. done. Qed.
 
-Lemma val_eq_dec (x y : val) : {x = y} + {x ≠ y}.
+(* The proof of this theorem uses that gen_tree, from stdpp, is Countable *)
+Global Instance val_countable : Countable val.
 Proof.
-  decide equality.
-Restart.
-  revert y. induction x; intros y; destruct y; try auto.
-  1,5: destruct b; destruct b0; auto.
-  1,2: destruct (Nat.eq_dec n n0); [auto|];
-    right; by injection.
-  destruct (IHx1 y1); destruct (IHx2 y2);
-  simplify_eq; [auto|right..]; by injection.
+  set (enc :=
+    fix encv v :=
+      match v with
+      | VUnit => GenLeaf (inl (inl tt))
+      | VBool b => GenLeaf (inl (inr (inl b)))
+      | VNat n => GenLeaf (inr (inl n))
+      | VRef n => GenLeaf (inr (inr n))
+      | VPair v1 v2 => GenNode 0 [encv v1; encv v2]
+      | VLock b => GenLeaf (inl (inr (inr b)))
+      end).
+  set (dec :=
+    fix decv v :=
+      match v with
+      | GenLeaf (inl (inl tt)) => VUnit
+      | GenLeaf (inl (inr (inl b))) => VBool b
+      | GenLeaf (inl (inr (inr b))) => VLock b
+      | GenLeaf (inr (inl n)) => VNat n
+      | GenLeaf (inr (inr n)) => VRef n
+      | GenNode _ [v1; v2] => VPair (decv v1) (decv v2)
+      | GenNode _ _ => VUnit (* dummy *)
+      end).
+  refine (inj_countable' enc dec _). intros.
+  induction x; eauto. simpl. by f_equal.
 Qed.
 
 (* alocks are the active locks, the locks that are currently locked *)
-Fixpoint alocks_stateful (p : trace) (a : list val) : list val :=
+Fixpoint alocks_stateful (p : trace) (a : gset nat) : gset nat :=
   match p with
   | [] => a
   | e :: p' =>
       match to_base e with
-      | Lock l => alocks_stateful p' (l :: a)
-      | Unlock l => alocks_stateful p' (remove val_eq_dec l a)
+      | Lock l => alocks_stateful p' ({[l]} ∪ a)
+      | Unlock l => alocks_stateful p' (a ∖ {[l]})
       | Join => alocks_stateful p' a
       end
   end.
 
-Definition alocks (p : trace) : list val := alocks_stateful p [].
+Definition alocks (p : trace) : gset nat := alocks_stateful p ∅.
+
+Lemma alocks_empty :
+  alocks [] = ∅.
+Proof. done. Qed.
 
 (* the thread is the combination of left/right of an event,
    represented as a list of bools *)
@@ -472,86 +521,463 @@ Fixpoint thread_stateful (e : event) (a : list bool) : list bool :=
 
 Definition thread (e : event) : list bool := thread_stateful e [].
 
-Print ifdec.
+Definition is_parent_or_child (tid tid' : list bool) : Prop :=
+  (tid `prefix_of` tid') \/ (tid' `prefix_of` tid).
 
-Fixpoint is_prefix (l l' : list bool) : bool :=
-  match l, l' with
-  | [], _ => true
-  | _, [] => false
-  | (b :: r), (b' :: r') => andb (Bool.eqb b b') (is_prefix r r')
-  end.
-
-Definition is_parent_or_child (tid tid' : list bool) : bool :=
-  orb (is_prefix tid tid') (is_prefix tid' tid).
+Global Instance base_event_countable : Countable base_event.
+Proof.
+  set (enc := λ e, match e with
+    | Lock n => inl (inl n)
+    | Unlock n => inl (inr n)
+    | Join => inr tt
+    end).
+  set (dec := λ e, match e with
+    | inl (inl n) => Lock n
+    | inl (inr n) => Unlock n
+    | inr tt => Join
+    end).
+  refine (inj_countable' enc dec _).
+  intros x. by destruct x.
+Qed.
 
 (* next events are events that could be scheduled next *)
 (* they are the first instruction of a thread that is running concurrently *)
-
-Print existsb.
-
 Fixpoint next_events_stateful
-  (p : trace) (n : list base_event) (u : list (list bool)) : list base_event :=
+  (p : trace) (n : gset base_event) (u : gset (list bool)) : gset base_event :=
   match p with
   | [] => n
   | e :: p' =>
-      if existsb (is_parent_or_child (thread e)) u
-        then (next_events_stateful p' n (thread e :: u))
-        else (next_events_stateful p' (to_base e :: n) (thread e :: u))
+      if decide (set_Exists (is_parent_or_child (thread e)) u)
+        then (next_events_stateful p' n ({[thread e]} ∪ u))
+        else (next_events_stateful p' ({[to_base e]} ∪ n) ({[thread e]} ∪ u))
   end.
 
-Definition next_events (p : trace) : list base_event :=
-  next_events_stateful p [] [].
-
-Fixpoint active (tid : list bool) (t : trace) : Prop :=
-  match t with
-  | [] => False
-  | e :: t' => thread e = tid ∨
-      (¬ is_prefix (thread e) tid ∧ ¬ is_prefix tid (thread e) ∧ active tid t')
-  end.
-
-Definition example_program : expr :=
-  EPar (EPar (ELock (EVal (VRef 0))) (ELock (EVal (VRef 1))))
-       (EPar (ELock (EVal (VRef 2))) (ELock (EVal (VRef 3)))).
-
-Example threading_example :
-  steps_trace
-    example_program ∅
-    (EVal (VPair (VPair VUnit VUnit) (VPair VUnit VUnit))) ∅
-    [Left (Left (Base (Lock (VRef 0))));
-     Left (Right (Base (Lock (VRef 1))));
-     Left (Base Join);
-     Right (Left (Base (Lock (VRef 2))));
-     Right (Right (Base (Lock (VRef 3))));
-     Right (Base Join);
-     Base Join].
-Proof. eauto 28 with step_trace. Qed.
-
-Example active_example (b1 b2 : base_event) :
-  active [true; false] [Left (Base b1); Right (Left (Base b2))].
-Proof.
-  compute. right. split; [|split]; tauto.
-Qed.
+Definition next_events (p : trace) : gset base_event :=
+  next_events_stateful p ∅ ∅.
 
 (* Checks wether, given a list of active locks, a base event is locking,
    meaning that a Lock instruction is trying to get a lock that is locked,
    or that an Unlock instruction is trying to release a lock that is unlocked *)
-Definition is_locking (al : list val) (e : base_event) : Prop :=
+Definition is_locking (al : gset nat) (e : base_event) : Prop :=
   match e with
-  | Lock l => In l al
-  | Unlock l => ~In l al
+  | Lock l => l ∈ al
+  | Unlock l => l ∉ al
   | Join => False
   end.
 
-Definition deadlock (t : trace) : Prop :=
-  ∃ (ph pt : trace), perm t (ph ++ pt) ∧
-      Forall (is_locking (alocks ph)) (next_events pt).
+Lemma forall_is_locking_empty (t : list base_event) :
+  Forall (is_locking ∅) t ->
+  Forall (fun e => exists l, e = Unlock l) t.
+Proof.
+  do 2 rewrite List.Forall_forall.
+  intros Hlock e Hin.
+  specialize (Hlock e Hin).
+  destruct e; [done | | done].
+  by exists n.
+Qed.
 
-(* Probably needed: The expressions do not contain a heap
-    instruction that changes the locks *)
-Theorem trace_soundness (e e' : expr) h h' (t : trace) :
+Fixpoint valid_stateful (t : trace) (a : gset nat) : Prop :=
+  match t with
+  | [] => True
+  | e :: p' =>
+      match to_base e with
+      | Lock l => l ∉ a /\ valid_stateful p' ({[l]} ∪ a)
+      | Unlock l => l ∈ a /\ valid_stateful p' (a ∖ {[l]})
+      | Join => valid_stateful p' a
+      end
+  end.
+
+Definition valid (t : trace) : Prop :=
+  valid_stateful t ∅.
+
+Lemma valid_empty :
+  valid [].
+Proof. done. Qed.
+
+Lemma valid_cons_inv t b a :
+  valid_stateful (b :: t) a ->
+  valid_stateful [b] a.
+Proof.
+  simpl. intros Hvalid.
+  induction b; [|tauto..].
+  destruct b; simpl in *; tauto.
+Qed.
+
+Lemma valid_left_inv t a :
+  valid_stateful (map Left t) a ->
+  valid_stateful t a.
+Proof.
+  revert a. induction t as [|e t]; [done|]. simpl.
+  intros a Hvalid. destruct (to_base e); [..|eauto];
+  split; try apply IHt; tauto.
+Qed.
+
+Lemma valid_right_inv t a :
+  valid_stateful (map Right t) a ->
+  valid_stateful t a.
+Proof.
+  revert a. induction t as [|e t]; [done|]. simpl.
+  intros a Hvalid. destruct (to_base e); [..|eauto];
+  split; try apply IHt; tauto.
+Qed.
+
+Lemma valid_to_base_iff b a :
+  valid_stateful [b] a <-> valid_stateful [Base (to_base b)] a.
+Proof. split; intros; done. Qed.
+
+Lemma valid_to_base_cons_iff b t a :
+  valid_stateful (b :: t) a <-> valid_stateful (Base (to_base b) :: t) a.
+Proof. split; intros; done. Qed.
+
+Lemma valid_stateful_is_locking t b a :
+  valid_stateful t a ->
+  valid_stateful (t ++ [b]) a \/ is_locking (alocks_stateful t a) (to_base b).
+Proof.
+  revert a. induction t as [|e t]; intros a Ht.
+  - simpl. induction b; [|done..].
+    destruct b as [v|v|];
+    [destruct (decide (v ∈ a))..|]; simpl; tauto.
+  - simpl in Ht. induction e; [|tauto..].
+    destruct b0; simpl in Ht;
+    [destruct (IHt _ (proj2 Ht)).. | destruct (IHt _ Ht)];
+    simpl; tauto.
+Qed.
+
+Lemma valid_is_locking t b :
+  valid t ->
+  valid (t ++ [b]) \/ is_locking (alocks t) (to_base b).
+Proof. apply valid_stateful_is_locking. Qed.
+
+Global Instance cell_eq_dec : EqDecision cell.
+Proof. solve_decision. Defined.
+
+Definition heap_locks (h : lock_heap) : gset nat :=
+  dom _ (filter (λ lc, lc.2 = true) h).
+
+Lemma heap_locks_empty :
+  heap_locks ∅ = ∅.
+Proof. set_solver. Qed.
+
+Definition deadlock (t : trace) : Prop :=
+  ∃ (ph pt : trace),
+      perm t (ph ++ pt) ∧
+      valid ph ∧
+      pt ≠ [] ∧
+      set_Forall (is_locking (alocks ph)) (next_events pt).
+
+Lemma empty_not_deadlock :
+  ¬ deadlock [].
+Proof.
+  intros (ph & pt & Hperm & Hpt & Hvalid & Hlock).
+  apply perm_nil_is_nil, app_eq_nil in Hperm.
+  tauto.
+Qed.
+
+Lemma step_trace_none_step (e e' : expr) h h' :
+  step_trace e h e' h' None ->
+  step e h e' h'.
+Proof.
+  intros Hstep. remember None as n.
+  induction Hstep; destruct b; try done.
+  - apply head_step_step. inv H; [|by constructor].
+    apply do_pure_step.
+    inv H0; by constructor.
+  - apply step_context_step;
+    eauto with context.
+  - apply step_context_step with (k := fun x => EPar x _);
+    eauto with context.
+  - apply step_context_step; eauto with context.
+Qed.
+
+(* 
+  We define a helper-operational semantics which only records base events
+  We can use this operational semantics to prove theorems about valid_stateful,
+  which doesn't care about the tree-like structure of events
+  We use this specifically for the lemmas:
+  step_trace_some_step & step_trace_heap_locks_some
+*)
+Inductive step_trace_base :
+  expr -> lock_heap ->
+  expr -> lock_heap ->
+  option base_event -> Prop :=
+  | do_head_step_trace_base e h e' h' (b : option base_event) :
+      head_step_trace e h e' h' b ->
+      step_trace_base e h e' h' b
+  | ctx_step_trace_base k e h e' h' (b : option base_event) :
+      ctx_trace k ->
+      step_trace_base e h e' h' b ->
+      step_trace_base (k e) h (k e') h' b
+  | par_l_step_trace_base e1 e2 h e1' h' (b : option base_event) :
+      step_trace_base e1 h e1' h' b ->
+      step_trace_base (EPar e1 e2) h (EPar e1' e2) h' b
+  | par_r_step_trace_base e1 e2 h e2' h' (b : option base_event) :
+      step_trace_base e2 h e2' h' b ->
+      step_trace_base (EPar e1 e2) h (EPar e1 e2') h' b.
+
+Lemma to_base_Base_id (b : option base_event) :
+  option_map to_base (option_map Base b) = b.
+Proof. by destruct b. Qed.
+
+Lemma to_base_Left_id (b : option event) :
+  option_map to_base (option_map Left b) = option_map to_base b.
+Proof. by destruct b. Qed.
+
+Lemma to_base_Right_id (b : option event) :
+  option_map to_base (option_map Right b) = option_map to_base b.
+Proof. by destruct b. Qed.
+
+Lemma step_trace_to_base e1 h1 e2 h2 (b : option event) :
+  step_trace e1 h1 e2 h2 b ->
+  step_trace_base e1 h1 e2 h2 (option_map to_base b).
+Proof.
+  intros Hstep.
+  induction Hstep;
+  [rewrite to_base_Base_id | | rewrite to_base_Left_id | rewrite to_base_Right_id];
+  by constructor.
+Qed.
+
+Lemma step_trace_some_step (e e' : expr) h h' b :
+  step_trace e h e' h' (Some b) ->
+  valid_stateful [b] (heap_locks h) ->
+  step e h e' h'.
+Proof.
+  intros Hstep Hvalid.
+  apply step_trace_to_base in Hstep. simpl in Hstep.
+  remember (Some (to_base b)) as b0. induction Hstep.
+  - destruct b0; [|done]. simplify_eq. inv H.
+    + inv H0. eauto with headstep.
+    + apply do_step with (k := fun x => x); eauto with context.
+      constructor. rewrite valid_to_base_iff in Hvalid.
+      rewrite <- H0 in Hvalid. destruct Hvalid as [Hvalid _].
+      rewrite elem_of_dom in H5. destruct H5. destruct x; [|done].
+      rewrite not_elem_of_dom in Hvalid.
+      rewrite map_filter_lookup_None in Hvalid.
+      destruct Hvalid as [Hnone | Hfalse]; [simplify_eq|].
+      specialize (Hfalse true H). done.
+    + apply do_step with (k := fun x => x); eauto with context.
+      constructor. rewrite valid_to_base_iff in Hvalid.
+      rewrite <- H0 in Hvalid. destruct Hvalid as [Hvalid _].
+      rewrite elem_of_dom in H5. destruct H5. destruct x; [done|].
+      rewrite elem_of_dom in Hvalid.
+      destruct Hvalid as [x Hvalid].
+      apply map_filter_lookup_Some_1_2 in Hvalid as Hv.
+      simpl in Hv. simplify_eq.
+      by eapply map_filter_lookup_Some_1_1.
+  - apply step_context_step; eauto with context.
+  - apply step_context_step with (k := fun x => EPar x e2); eauto with context.
+  - apply step_context_step; eauto with context.
+Qed.
+
+Lemma step_trace_heap_locks_none e1 h1 e2 h2:
+  step_trace e1 h1 e2 h2 None ->
+  heap_locks h1 = heap_locks h2.
+Proof.
+  intros Hsteps. remember None as n.
+  induction Hsteps; [ | | destruct b; [done|]..]; eauto.
+  destruct b; [done|]. inv H; [done|].
+  unfold heap_locks.
+  rewrite map_filter_insert_False; [|done].
+  rewrite delete_notin; [done|].
+  by rewrite not_elem_of_dom in H0.
+Qed.
+
+Lemma heap_locks_lock l h :
+  heap_locks (<[l:=true]> h) = {[l]} ∪ heap_locks h.
+Proof.
+  unfold heap_locks.
+  rewrite map_filter_insert_True; [|done].
+  by rewrite dom_insert_L.
+Qed.
+
+Lemma heap_locks_unlock l h :
+  heap_locks (<[l:=false]> h) = heap_locks h ∖ {[l]}.
+Proof.
+  unfold heap_locks.
+  rewrite map_filter_insert_False; [|done].
+  by rewrite map_filter_delete dom_delete_L.
+Qed.
+
+Lemma step_trace_heap_locks_some e1 h1 e2 h2 t b :
+  step_trace e1 h1 e2 h2 (Some b) ->
+  valid_stateful (b :: t) (heap_locks h1) ->
+  valid_stateful t (heap_locks h2).
+Proof.
+  intros Hstep Hvalid.
+  apply step_trace_to_base in Hstep. simpl in Hstep.
+  remember (Some (to_base b)) as b0.
+  induction Hstep; [|eauto..].
+  simplify_eq. inv H; [|simpl in Hvalid..].
+  - inv H0. rewrite valid_to_base_cons_iff in Hvalid.
+    by rewrite <- H3 in Hvalid.
+  - rewrite <- H0 in Hvalid. rewrite heap_locks_lock; tauto.
+  - rewrite <- H0 in Hvalid. rewrite heap_locks_unlock; tauto.
+Qed.
+
+Lemma steps_trace_valid_steps (e e' : expr) h h' t :
   steps_trace e h e' h' t ->
-  deadlock t ->
+  valid_stateful t (heap_locks h) ->
+  steps e h e' h'.
+Proof.
+  intros Hsteps Hvalid.
+  induction Hsteps; [constructor | |].
+  - eapply steps_step.
+    + by apply step_trace_none_step.
+    + erewrite step_trace_heap_locks_none in Hvalid; eauto.
+  - eapply steps_step.
+    + eapply step_trace_some_step; [done|].
+      by eapply valid_cons_inv.
+    + eauto using step_trace_heap_locks_some.
+Qed.
+
+Lemma steps_trace_stuck e h e' h' ph :
+  steps_trace e h e' h' ph ->
+  valid_stateful ph (heap_locks h) ->
+  stuck e' h' ->
   stuck e h.
 Proof.
-  intros Hsteps Hdeadlock.
+  intros Hsteps Hvalid (e'' & h'' & Hsteps' & Hstuck).
+  exists e'', h''. split; [|done].
+  eapply perm.steps_trans; [|done].
+  by eapply steps_trace_valid_steps.
+Qed.
+
+(* Helper lemmas for steps_trace_locks_stateful *)
+Lemma step_trace_alocks e1 h1 e2 h2 b t :
+  step_trace e1 h1 e2 h2 (Some b) ->
+  alocks_stateful (b :: t) (heap_locks h1) = alocks_stateful t (heap_locks h2).
+Proof.
+  intros Hstep.
+  apply step_trace_to_base in Hstep. simpl in Hstep.
+  remember (Some (to_base b)) as b0.
+  induction Hstep; [|tauto..].
+  simplify_eq. inv H.
+  - inv H0. simpl. by rewrite <- H3.
+  - simpl. rewrite <- H0.
+    by rewrite heap_locks_lock.
+  - simpl. rewrite <- H0.
+    by rewrite heap_locks_unlock.
+Qed.
+
+Lemma step_trace_valid_stateful e1 h1 e2 h2 b t :
+  step_trace e1 h1 e2 h2 (Some b) ->
+  valid_stateful (b :: t) (heap_locks h1) ->
+  valid_stateful t (heap_locks h2).
+Proof.
+  intros Hstep Hvalid.
+  apply step_trace_to_base in Hstep. simpl in Hstep.
+  remember (Some (to_base b)) as b0.
+  induction Hstep; [|tauto..].
+  simplify_eq. inv H.
+  - inv H0. simpl in Hvalid. by rewrite <- H3 in Hvalid.
+  - simpl in Hvalid. rewrite <- H0 in Hvalid.
+    rewrite heap_locks_lock. tauto.
+  - simpl in Hvalid. rewrite <- H0 in Hvalid.
+    rewrite heap_locks_unlock. tauto.
+Qed.
+
+Lemma steps_trace_locks_stateful e h e' h' ph :
+  steps_trace e h e' h' ph ->
+  valid_stateful ph (heap_locks h) ->
+  alocks_stateful ph (heap_locks h) = heap_locks h'.
+Proof.
+  intros Hsteps Hvalid. induction Hsteps; [done|..].
+  - erewrite (step_trace_heap_locks_none _ _ _ _ H).
+    erewrite step_trace_heap_locks_none in Hvalid; eauto.
+  - rewrite <- IHHsteps.
+    + by eapply step_trace_alocks.
+    + by eapply step_trace_valid_stateful.
+Qed.
+
+Lemma steps_trace_locks e e' h' ph :
+  steps_trace e ∅ e' h' ph ->
+  valid ph ->
+  alocks ph = heap_locks h'.
+Proof.
+  intros. unfold alocks.
+  rewrite <- heap_locks_empty.
+  eapply steps_trace_locks_stateful; [done|].
+  by rewrite heap_locks_empty.
+Qed.
+
+Definition next_threads (t : trace) : gset (list bool).
+Admitted. (* Idea: Redefine next_events in terms of next_threads *)
+
+Lemma next_events_app t t' n n' u :
+  next_events t = n ->
+  next_threads t = u ->
+  next_events_stateful t' n u = n' ->
+  next_events (t ++ t') = n'.
+Proof.
 Admitted.
+
+Lemma steps_trace_heap_locks_stuck e h v h' pt :
+  steps_trace e h (EVal v) h' pt ->
+  pt ≠ [] ->
+  set_Forall (is_locking (heap_locks h)) (next_events pt) ->
+  stuck e h.
+Proof.
+  (* Need to generalize to next_events_stateful *)
+  (* Idea: Need some lemma about imm_stuck *)
+Admitted.
+
+Theorem trace_soundness (e : expr) (v : val) h' (t : trace) :
+  steps_trace e ∅ (EVal v) h' t ->
+  deadlock t ->
+  stuck e ∅.
+Proof.
+  intros Hsteps (ph & pt & Hperm & Hvalid & Hpt & Hdeadlock).
+  apply (steps_perm _ _ _ _ _ _ Hperm) in Hsteps.
+  destruct Hsteps as [h1 Hsteps].
+  apply (steps_split _ _ _ _ _ _) in Hsteps as (e' & h'' & Hsteps & Hsteps').
+  eapply steps_trace_stuck; [|rewrite heap_locks_empty|]; [done..|].
+  erewrite steps_trace_locks in Hdeadlock; try done.
+  by eapply steps_trace_heap_locks_stuck.
+Qed.
+
+(*
+  1) Verslag
+    1a) Introduction
+        -- Contributions incl Differences with CISL paper (globally)
+    1b) Preliminaries
+        -- Separation logic
+        -- ISL
+        -- CISL (High-level overview)
+    1c) CISL_DC
+    1d) CISL_DD
+        -- Trace based notion of deadlock
+    1e) Related Work
+        -- CISL paper incl differences (detailed)
+        -- Other formal definition of deadlock
+    1f) Conclusion & Future work
+        -- Locks + state using Iris locks specs
+        -- Deadlock definition without permutations
+  2) Prove lemmas
+*)
+
+(* let l = alloc(lock(false)) in
+    acquire l; || //while(true);
+    acquire l; || release l;
+    true + 0   ||
+
+  What does CISL say about the above program (with/without while(true))?
+
+Possible acquire states:
+ 1) acquire v, where v does not point to a lock
+ 2) acquire v, deadlock in thread, no other threads
+ 3) acquire v, other threads exist
+ 4) acquire v, all threads are doing an acquire on a locked lock
+*)
+
+(*
+Possible definitions of deadlock:
+  For all possible steps, a lock remains locked
+    - Starvation (Not necessarily deadlock if infinite loops)
+  Cannot step, but not is_error
+    - Not is_error is difficult to prove
+    - Use correctness logic to prove typed -> correct,
+      then typed /\ not step -> deadlock
+  Histories
+    - Locks don't lock, but add event to history
+    - CISL paper only uses non-deterministic choice and loops
+    - Generalizing to deterministic may introduce bugs
+*)

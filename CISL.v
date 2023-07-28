@@ -1306,10 +1306,9 @@ Proof.
   intros HISLERR [h' HQ].
   specialize (HISLERR emp%S).
   apply ILERR_cons with (P := emp%S) (Q := Q) in HISLERR;
-  [ | eauto with seplogic..].
+  [ | eauto with seplogic..]. unfold ILERR in HISLERR.
   destruct (HISLERR h' HQ) as (e' & h & Hh & Hsteps & Herr).
-  exists e', h'.
-  by inv Hh.
+  inv Hh. by exists e', h'.
 Qed.
 
 (* Examples *)
@@ -1449,51 +1448,3 @@ Definition Ex_race (n : nat) : expr :=
       (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
       (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
   ).
-
-(*
-  1[x] Alloc, Load, Store, Free
-  2[x] Examples with Par rules
-  3[ ] Use proofmode.v for Iris tactics
-  4[ ] Write down in paper
-    [x] Operational semantics
-    [x] Contexts using K ::= O | load K | ..., same order as operational semantics
-    [x] Unsafe
-    [x] Triple definitions
-    [x] Rules
-    [-] Example (also after operational semantics, then show how to prove it unsafe here)
-    [ ] Process feedback
-  5[ ] Module with notations, import in section with examples
-  6[x] Add lock/unlock
-  7[ ] CISL RD/DD
-  8[ ] Write out different definitions of deadlocks, prove implications
-  9[ ] Think about hoare triple with histories, which rules would work for them?
-        (Think about definition later)
-*)
-
-(* let l = alloc(lock(false)) in
-    acquire l; || //while(true);
-    acquire l; || release l;
-    true + 0   ||
-
-  What does CISL say about the above program (with/without while(true))?
-
-Possible acquire states:
- 1) acquire v, where v does not point to a lock
- 2) acquire v, deadlock in thread, no other threads
- 3) acquire v, other threads exist
- 4) acquire v, all threads are doing an acquire on a locked lock
-*)
-
-(*
-Possible definitions of deadlock:
-  For all possible steps, a lock remains locked
-    - Starvation (Not necessarily deadlock if infinite loops)
-  Cannot step, but not is_error
-    - Not is_error is difficult to prove
-    - Use correctness logic to prove typed -> correct,
-      then typed /\ not step -> deadlock
-  Histories
-    - Locks don't lock, but add event to history
-    - CISL paper only uses non-deterministic choice and loops
-    - Generalizing to deterministic may introduce bugs
-*)
