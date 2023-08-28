@@ -427,7 +427,6 @@ Section perm_inv.
 
 End perm_inv.
 
-
 Lemma perm1_app_inv t t0 t1 :
   perm1 (t ++ t0) (t ++ t1) ->
   perm1 t0 t1.
@@ -444,6 +443,35 @@ Lemma perm_app_inv t t0 t1 :
 Proof.
   induction t; intros Hperm; [done|].
   apply IHt. by eapply perm_inv.
+Qed.
+
+Lemma perm1_app t0 t1 t :
+  perm1 t0 t1 ->
+  perm (t0 ++ t) (t1 ++ t).
+Proof.
+  intros Hperm.
+  induction Hperm; eauto with perm.
+Qed.
+
+Lemma perm_app_single t0 t1 a :
+  perm t0 t1 ->
+  perm (t0 ++ [a]) (t1 ++ [a]).
+Proof.
+  intros Hperm.
+  induction Hperm.
+  - induction H; eauto with perm.
+  - eapply perm_trans; eauto using perm1_app.
+Qed.
+
+Lemma perm_app t0 t1 t :
+  perm t0 t1 ->
+  perm (t0 ++ t) (t1 ++ t).
+Proof.
+  revert t0 t1. induction t as [ | a t IH ];
+  intros t0 t1 Hperm.
+  - by rewrite! app_nil_r.
+  - rewrite !cons_middle !app_assoc.
+    by apply IH, perm_app_single.
 Qed.
 
 (**************************
@@ -465,7 +493,6 @@ Inductive expr :=
   | EWhile : expr -> expr -> expr
   | ESeq : expr -> expr -> expr
   | EPar : expr -> expr -> expr
-  | ENewlock : expr
   | ELock : expr -> expr
   | EUnlock : expr -> expr.
 
@@ -485,7 +512,6 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   | EWhile e1 e2 => EWhile (subst x w e1) (subst x w e2)
   | ESeq e1 e2 => ESeq (subst x w e1) (subst x w e2)
   | EPar e1 e2 => EPar (subst x w e1) (subst x w e2)
-  | ENewlock => ENewlock
   | ELock e => ELock (subst x w e)
   | EUnlock e => EUnlock (subst x w e)
   end.
@@ -519,11 +545,8 @@ Inductive head_step : expr -> lock_heap -> expr -> lock_heap -> Prop :=
   | do_pure_step e e' h :
       pure_step e e' ->
       head_step e h e' h
-  | Newlock_headstep (h : lock_heap) l :
-      l ∉ dom (gset nat) h ->
-      head_step ENewlock h (EVal (VRef l)) (<[ l := false ]> h)
   | Lock_headstep h l :
-      h !! l = Some (false) ->
+      l ∉ dom (gset nat) h \/ h !! l = Some (false) ->
       head_step (ELock (EVal (VRef l))) h (EVal VUnit) (<[ l := true ]> h)
   | Unlock_headstep h l :
       h !! l = Some (true) ->
@@ -672,7 +695,9 @@ Proof.
     try apply lookup_union_Some_l; eauto. constructor.
     rewrite elem_of_dom lookup_union_is_Some. rewrite elem_of_dom in H.
     rewrite map_disjoint_insert_l eq_None_not_Some in H0.
-    tauto.
+    destruct H as [Hnew | Hunlocked].
+    - left. intros ?. tauto.
+    - right. by rewrite lookup_union_l.
   }
   intros. specialize (H ∅). rewrite !right_id in H.
   apply H. solve_map_disjoint.
