@@ -2491,151 +2491,22 @@ Proof.
   tauto.
 Qed.
 
-Lemma none_perm_all_can_swap b pn :
-  exists pn1 pn2,
-    none_perm pn (pn1 ++ pn2) /\
-    Forall (λ x, none_can_swap b x) pn1 /\
-    (forall b' pn21 pn22,
-      pn2 = pn21 ++ b' :: pn22 ->
-      none_can_swap b b' ->
-      exists b'',
-        In b'' pn21 /\
-        ¬ none_can_swap b b'' /\
-        ¬ none_can_swap b' b''
-    ).
-Proof.
-  assert (exists n, length pn = n) by (induction pn; eauto).
-  destruct H as [n Hn]. revert n b pn Hn.
-  refine (strong_induction _ _); intros n IH b pn Hn.
-  destruct pn as [|a pn]. {
-    exists [], []. repeat split; eauto using none_perm.
-    intros b' t1 t2 Heq. by apply app_cons_not_nil in Heq.
-  }
-  rewrite cons_length in Hn.
-  assert (Hn' : length pn < n) by lia.
-  destruct (none_can_swap_dec b a) as [Hswap | Hswap].
-  - destruct (IH (length pn) Hn' b pn eq_refl) as
-      (pn1 & pn2 & Hperm & Hnone & Hpn2).
-    exists (a :: pn1), pn2. repeat split.
-    + by constructor.
-    + by apply Forall_cons.
-    + exact Hpn2.
-  - destruct (IH (length pn) Hn' a pn eq_refl) as
-      (pna1 & pna2 & Hperma & Hnonea & Hpna2).
-    assert (Hl := none_perm_length _ _ Hperma).
-    rewrite app_length in Hl.
-    assert (Hn'' : length pna1 < n) by lia.
-    destruct (IH (length pna1) Hn'' b pna1 eq_refl) as
-      (pnb1 & pnb2 & Hpermb & Hnoneb & Hpnb2). clear IH.
-    exists pnb1, ((pnb2 ++ [a]) ++ pna2). repeat split; [ | done | ].
-    + eapply none_perm_trans; [by apply none_perm_skip|].
-      rewrite app_comm_cons app_assoc. apply none_perm_app.
-      eapply none_perm_trans; [by apply none_perm_skip|].
-      rewrite app_assoc. apply all_can_swap_none_perm.
-      by apply (Forall_none_perm _ pna1 _).
-    + intros b' t t' Ht Hb'.
-      destruct (in_dec none_event_eq_dec a t) as [Hin | Hnin].
-      * destruct (none_can_swap_dec b' a) as [Hab' | Hab']; [|eauto].
-        apply app_eq_app in Ht. destruct Ht as [t2 [[Ht1 Ht2] | [Ht1 Ht2]]].
-        -- apply app_eq_app in Ht1. destruct Ht1 as [t3 [[Ht3 Ht4] | [Ht3 Ht4]]].
-           ++ destruct t3; simpl in *.
-              ** rewrite app_nil_r in Ht3.
-                 simplify_eq. simpl in Ht2. by simplify_eq.
-              ** simplify_eq. rewrite <- app_comm_cons in Ht2.
-                 simplify_eq. eauto.
-           ++ simplify_eq. destruct t3; simpl in *; simplify_eq.
-              ** simpl in Ht2. by simplify_eq.
-              ** symmetry in H0. rewrite app_nil in H0. destruct H0 as [-> ->].
-                 simpl in *. simplify_eq.
-                 apply none_can_swap_symm in Hab'.
-                 specialize (Hpna2 b' [] t' eq_refl Hab').
-                 by destruct Hpna2 as (? & ? & ?).
-        -- simplify_eq. apply none_can_swap_symm in Hab'.
-           specialize (Hpna2 _ _ _ eq_refl Hab').
-           destruct Hpna2 as (b'' & Hinb'' & Hnswap1 & Hnswap2).
-           admit. (* May be false, need better conclusion *)
-                  (* Possible stronger IH: There are no elements left of b''
-                      with same property *)
-      * enough (Hpnb2b' : exists t2, pnb2 = t ++ b' :: t2). 
-        { destruct Hpnb2b' as (? & ?). eauto. }
-        clear Hpermb Hpnb2. revert pnb2 Ht. induction t; intros pnb2 Ht.
-        -- destruct pnb2; simpl in *.
-           ++ by simplify_eq.
-           ++ simplify_eq. eauto.
-        -- destruct pnb2; simpl in *.
-           ++ simplify_eq. tauto.
-           ++ simplify_eq. assert (Hat : ¬ In a t) by tauto.
-              destruct (IHt Hat pnb2 H0). exists x.
-              by rewrite H.
-Admitted.
+Definition step_no_event : relation (expr * lock_heap) := λ H H',
+  let (e, h) := H in
+  let (e', h') := H' in
+  step_trace e h e' h' None.
 
-Lemma none_steps_trace_middle {e1 h1 e2 h2 e3 b pn} :
-  none_step_trace e1 h1 e2 h2 b ->
-  none_steps_trace e2 h2 e3 h2 pn ->
-  Forall (λ x, ¬ is_some x) pn ->
-  exists e2' pn1 pn2,
-    Forall (λ x, ¬ is_some x) pn1 /\
-    Forall (λ x, ¬ is_some x) pn2 /\
-    Forall (λ x, none_can_swap b x) pn1 /\
-    none_steps_trace e1 h1 e2' h1 pn1 /\
-    none_steps_trace e2' h1 e3 h2 (b :: pn2) /\
-    forall e' h' t,
-      none_step_trace e2' h1 e' h' t ->
-      ¬ In t pn2.
+Lemma step_sn e h v h' t :
+  steps_trace e h (EVal v) h' t ->
+  sn (step_no_event) (e, h).
 Proof.
-  
+  intros Hsteps.
+  Check @sn_wn. Print red. Print sn. Print Acc. Print flip.
+  Print wn. Print nf. Print relation.
+  About rtc_nsteps. About lt_wf. Print diamond.
+  (* TODO: steps_trace e h (EVal v) h' t ->
+           exists n, e steps to v in n steps *)
 Admitted.
-
-Lemma none_steps_trace_none_first {e h v h' pt} :
-  none_steps_trace e h (EVal v) h' pt ->
-  exists e' pn pr,
-    remove_none_map from_none_event pt = remove_none_map from_none_event pr /\
-    none_steps_trace e h e' h pn /\
-    none_steps_trace e' h (EVal v) h' pr /\
-    Forall (λ x, ¬ is_some x) pn /\
-    (forall e'' h'' t,
-      none_step_trace e' h  e'' h'' t -> is_some t).
-Proof.
-  intros Hsteps. remember (EVal v) as ev.
-  induction Hsteps; subst.
-  { (* Base case *)
-    exists (EVal v), [], []. repeat split;
-    eauto using none_perm, none_steps_trace.
-    intros e'' h'' t Hstep.
-    by apply step_trace_none_to_step_trace, not_step_trace_val in Hstep.
-  } (* Inductive step *)
-  specialize (IHHsteps eq_refl).
-  destruct IHHsteps as (e2' & pn & pr & Hperm & Hstepsn & Hstepsr & Hnone & Hsome).
-  destruct (decision_is_some b) as [Hb | Hb].
-  - destruct (none_steps_trace_middle H Hstepsn Hnone) as
-      (ef & pn1 & pn2 & Hpn1 & Hpn2 & Hnone' & Hstepsf & Hstepsf' & Hnin).
-    exists ef, pn1, (b :: pn2 ++ pr).
-    assert (Hbp : none_steps_trace ef h1 (EVal v) h3 (b :: pn2 ++ pr)) by
-      (rewrite app_comm_cons; by eapply none_steps_trace_trans).
-    repeat split; [| done.. |].
-    + apply remove_none_map_cons.
-      rewrite remove_none_map_app.
-      by rewrite (not_some_remove_none_is_empty _ Hpn2).
-    + intros e'' h'' t'' Hstep''.
-      assert (Hin := none_steps_trace_in_trace Hbp _ _ _ Hstep'').
-      destruct (none_event_eq_dec t'' b) as [<- | Hne]; inv Hin; try done.
-      rewrite in_app_iff in H0.
-      assert (Hn0 : ¬ In t'' pn2).
-      { intros Hin. by specialize (Hnin _ _ _ Hstep'' Hin). }
-      destruct H0 as [? | Hin]; [done|].
-      destruct (none_steps_trace_event_postponed Hstep'' Hstepsf')
-        as (x & hx & Hx); [intros [?|?]; simplify_eq|].
-      eauto.
-  - exists e2', (b :: pn), pr.
-    assert (Heq := none_step_trace_heap_eq H Hb).
-    subst. repeat split;
-    eauto using none_perm, none_steps_trace.
-    simpl. destruct (from_none_event b) eqn:Heq; [|done].
-    exfalso. clear H. revert e Heq. induction b; intros e Heq.
-    + by destruct o.
-    + simpl in *. destruct (from_none_event b); eauto.
-    + simpl in *. destruct (from_none_event b); eauto.
-Qed.
 
 Lemma steps_trace_none_first {e h v h' pt} :
   steps_trace e h (EVal v) h' pt ->
@@ -2645,52 +2516,9 @@ Lemma steps_trace_none_first {e h v h' pt} :
     steps_trace e' h (EVal v) h' pt /\
     (forall e'' h'' t,
       step_trace e' h e'' h'' t -> exists b, t = Some b).
-Proof. (* TODO *)
-Check @sn_wn. Print wn. About rtc_nsteps. About lt_wf. Print diamond.
-  intros Hsteps Hpt.
-  apply steps_trace_to_steps_trace_none in Hsteps.
-  destruct Hsteps as (t' & Hsteps & Ht').
-  apply none_steps_trace_none_first in Hsteps.
-  destruct Hsteps as (e' & pn & pr & Hperm & Hnone & Hrest & Hempty & Hin).
-  exists e'.
-  apply steps_trace_none_to_steps_trace in Hnone.
-  rewrite (not_some_remove_none_is_empty pn Hempty) in Hnone.
-  simpl in Hperm. repeat split; [done|..].
-  - apply steps_trace_none_to_steps_trace in Hrest.
-    by rewrite Ht' Hperm.
-  - intros e'' h'' t Hstep.
-    destruct t; [eauto|].
-    destruct (step_trace_to_step_trace_none_none Hstep) as (b & Hstepb & Hb).
-    specialize (Hin _ _ _ Hstepb).
-    clear Hstepb. exfalso. induction b.
-    + by destruct o.
-    + apply IHb; [done|]. simpl in Hb.
-      by destruct (from_none_event b).
-    + apply IHb; [done|]. simpl in Hb.
-      by destruct (from_none_event b).
-Qed.
-
-(*
-  intros Hsteps Hpt. remember (EVal v) as ev.
-  induction Hsteps; subst; [done | | destruct t]; [| clear IHHsteps Hpt |].
-  - (* Case: None step *)
-    specialize (IHHsteps eq_refl Hpt).
-    destruct IHHsteps as (e' & Hnone & Hrest & Hin).
-    assert (Heq := step_trace_none_eq H). subst.
-    exists e'. repeat split; eauto using steps_trace.
-  - (* Case: Some step, t = [] *)
-    assert (Hunique := steps_trace_singleton_unique H Hsteps).
-    exists e1. repeat split; eauto using steps_trace.
-  - (* Case: Some step, t ≠ [] *)
-    destruct IHHsteps as (e' & Hnone & Hrest & Hin); [done..|].
-      (* Proof idea: split Hnone into two steps:
-        1) Steps that can be done before (H : step_trace e1 h1 e2 h2 (Some b))
-        2) Steps that can only be done after that step
-       Then the order of steps will be (1) H (2) Hrest
-       which completes the proof *)
-    admit.
+Proof.
+  (* TODO *)
 Admitted.
-*)
 
 Lemma steps_trace_not_val {e h e' h' t} :
   steps_trace e h e' h' t ->
