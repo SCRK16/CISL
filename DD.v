@@ -957,6 +957,77 @@ Proof.
     eexists. by eapply steps_step_some.
 Qed.
 
+Lemma step_base_ctxs {e1 h1 e2 h2 b} :
+  step_trace e1 h1 e2 h2 (Some (Base b)) ->
+  exists k e e', ctxs_trace k /\
+    e1 = k e /\
+    e2 = k e' /\ 
+    head_step_trace e h1 e' h2 (Some b).
+Proof.
+  intros Hstep. remember (Some (Base b)) as bb.
+  induction Hstep; [ | | by destruct b0..].
+  - destruct b0; [|done]. simpl in Heqbb. simplify_eq.
+    exists (λ x, x), e, e'.
+    repeat split; auto with context.
+  - destruct (IHHstep Heqbb) as (k0 & e0 & e0' & Hctx0 & -> & -> & Hhead).
+    exists (λ x, k (k0 x)), e0, e0'.
+    repeat split; auto with context.
+Qed.
+
+Lemma ctxs_step_not_val {e1 h1 e2 h2 b k} :
+  ctxs_trace k ->
+  ¬ is_val e1 ->
+  step_trace (k e1) h1 e2 h2 b ->
+  exists e2', e2 = k e2' /\
+    step_trace e1 h1 e2' h2 b.
+Proof.
+  intros Hctx Hnval. revert e2.
+  induction Hctx; intros e2 Hstep; [eauto|].
+  apply (ctxs_not_val Hctx) in Hnval.
+  destruct (ctx_step_not_val H Hnval Hstep) as (e2' & -> & H').
+  destruct (IHHctx _ H') as (e3 & -> & H3).
+  eauto.
+Qed.
+
+Lemma not_step_trace_val {v h1 e h2 t} :
+  ¬ step_trace (EVal v) h1 e h2 t.
+Proof.
+  intros Hstep. inv Hstep.
+  - inv H. inv H0.
+  - inv H0.
+Qed.
+
+Ltac unique_tac := repeat
+  match goal with
+  | H : ctx_trace _ |- _ => inv H
+  | H : step_trace (EVal _) _ _ _ _ |- _ => by apply not_step_trace_val in H
+  | H : pure_step_trace _ _ _ |- _ => inv H
+  | H : head_step_trace _ _ _ _ _ |- _ => inv H
+  | H : step_trace _ _ _ _ _ |- _ => inv H
+  | _ => intros || reflexivity
+  end.
+
+Lemma head_step_trace_unique {e1 h1 e2 h2 b} :
+  head_step_trace e1 h1 e2 h2 b ->
+  forall e' h' t, step_trace e1 h1 e' h' t -> t = option_map Base b.
+Proof. unique_tac. Qed.
+
+Lemma step_base_unique {e1 h1 e2 h2 b} :
+  step_trace e1 h1 e2 h2 (Some (Base b)) ->
+  forall e2' h2' t,
+    step_trace e1 h1 e2' h2' t ->
+    t = Some (Base b).
+Proof.
+  intros Hstep e2' h2' t Hstep'.
+  destruct (step_base_ctxs Hstep) as
+    (k & e & e' & Hctx & -> & -> & Hhead).
+  assert (Hnval := step_trace_not_val _ _ _ _ _
+    (do_head_step_trace _ _ _ _ _ Hhead)).
+  destruct (ctxs_step_not_val Hctx Hnval Hstep') as
+    (e2'' & -> & Hstep'').
+  apply (head_step_trace_unique Hhead _ _ _ Hstep'').
+Qed.
+
 Lemma steps_perm e h e' h' (t t' : trace) :
   perm t t' ->
   steps_trace e h e' h' t ->
@@ -978,7 +1049,7 @@ Proof.
     destruct (steps_split _ _ _ _ _ _ Hsteps) as (e1 & h1 & Hsteps1 & Hsteps2).
     destruct (steps_swap Hswap Hsteps1) as [h1' Hsteps1'].
     assert (Hperm : perm [y; x] [x; y]).
-    { constructor. constructor. by apply can_swap_symm. }
+    { do 2 constructor. by apply can_swap_symm. }
     destruct (steps_trace_heap_indifferent h1' Hsteps2) as (h3 & Hsteps3).
     destruct (IH _ _ _ _ Hsteps3) as (h4 & Hsteps4).
     exists h4. by eapply steps_trans.
@@ -1060,8 +1131,125 @@ Fixpoint thread_stateful (e : event) (a : list bool) : list bool :=
 
 Definition thread (e : event) : list bool := thread_stateful e [].
 
+Lemma thread_stateful_cons e b a :
+  thread_stateful e (b :: a) = b :: thread_stateful e a.
+Proof. revert b a. induction e; intros b' a; eauto. Qed.
+
+Lemma thread_left (e : event) :
+  thread (Left e) = false :: thread e.
+Proof.
+  unfold thread. simpl.
+  apply thread_stateful_cons.
+Qed.
+
+Lemma thread_right (e : event) :
+  thread (Right e) = true :: thread e.
+Proof.
+  unfold thread. simpl.
+  apply thread_stateful_cons.
+Qed.
+
+Fixpoint is_parent_or_child' (e e' : event) : Prop :=
+  match (e, e') with
+  | (Base _, _) => True
+  | (_, Base _) => True
+  | (Left b, Left b') => is_parent_or_child' b b'
+  | (Right b, Right b') => is_parent_or_child' b b'
+  | _ => False
+  end.
+
 Definition is_parent_or_child (tid tid' : list bool) : Prop :=
   (tid `prefix_of` tid') \/ (tid' `prefix_of` tid).
+
+Lemma is_parent_or_child_cons a b c :
+  is_parent_or_child a b ->
+  is_parent_or_child (c :: a) (c :: b).
+Proof.
+  intros [Hpoc | Hpoc]; [left | right]; by apply prefix_cons.
+Qed.
+
+Lemma is_parent_or_child_cons_inv a b c :
+  is_parent_or_child (c :: a) (c :: b) ->
+  is_parent_or_child a b.
+Proof.
+  intros [Hpoc | Hpoc]; [left | right]; by eapply prefix_cons_inv_2.
+Qed.
+
+Lemma is_parent_or_child_cons_eq a b c d :
+  is_parent_or_child (c :: a) (d :: b) ->
+  c = d.
+Proof.
+  intros [Hpoc | Hpoc]; [|symmetry]; by eapply prefix_cons_inv_1.
+Qed.
+
+Lemma is_parent_or_child_equiv (e e' : event) :
+  is_parent_or_child' e e' <-> is_parent_or_child (thread e) (thread e').
+Proof.
+  revert e'. induction e.
+  - unfold thread. simpl. intros e'.
+    split; [|done].
+    intros _. left. apply prefix_nil.
+  - unfold thread. intros e'.
+    destruct e'; simpl.
+    + split; [|done].
+      intros _. right. apply prefix_nil.
+    + split.
+      * intros H. rewrite IHe in H.
+        rewrite! thread_stateful_cons.
+        by apply is_parent_or_child_cons.
+      * intros H.
+        rewrite! thread_stateful_cons in H.
+        apply is_parent_or_child_cons_inv in H.
+        by rewrite IHe.
+    + split; [done|].
+      intros H.
+      rewrite! thread_stateful_cons in H.
+      by apply is_parent_or_child_cons_eq in H.
+  - unfold thread. intros e'.
+    destruct e'; simpl.
+    + split; [|done].
+      intros _. right. apply prefix_nil.
+    + split; [done|].
+      intros H.
+      rewrite! thread_stateful_cons in H.
+      by apply is_parent_or_child_cons_eq in H.
+    + split.
+      * intros H. rewrite IHe in H.
+        rewrite! thread_stateful_cons.
+        by apply is_parent_or_child_cons.
+      * intros H.
+        rewrite! thread_stateful_cons in H.
+        apply is_parent_or_child_cons_inv in H.
+        by rewrite IHe.
+Qed.
+
+Lemma is_parent_or_child_can_swap (e e' : event) :
+  is_parent_or_child' e e' <-> ¬ can_swap e e'.
+Proof.
+  revert e'. induction e; split; simpl.
+  - intros _ Hswap. inv Hswap.
+  - done.
+  - destruct e'.
+    + intros _ Hswap. inv Hswap.
+    + intros Hpoc Hswap. inv Hswap.
+      by rewrite IHe in Hpoc.
+    + done.
+  - intros Hswap. destruct e'.
+    + done.
+    + rewrite IHe. intros Hswap'.
+      apply Hswap. by constructor.
+    + apply Hswap. constructor.
+  - destruct e'.
+    + intros _ Hswap. inv Hswap.
+    + done.
+    + intros Hpoc Hswap. inv Hswap.
+      by rewrite IHe in Hpoc.
+  - intros Hswap. destruct e'.
+    + done.
+    + apply Hswap. constructor.
+    + rewrite IHe. intros Hswap'.
+      apply Hswap. by constructor.
+Qed.
 
 Lemma step_not_parent_or_child {e h e' h' e'' h'' a b} :
   step_trace e h e' h' (Some a) ->
@@ -1069,8 +1257,34 @@ Lemma step_not_parent_or_child {e h e' h' e'' h'' a b} :
   a ≠ b ->
   ¬ is_parent_or_child (thread a) (thread b).
 Proof.
-  intros Hstepa Hstepb Hne Hpoc.
-Admitted.
+  revert e h e' h' a e'' h''.
+  induction b; intros e h e' h' a e'' h'' Hstepa Hstepb Hne.
+  - eapply step_base_unique in Hstepa; [|done]. simplify_eq.
+  - rewrite thread_left. destruct a.
+    + eapply step_base_unique in Hstepb; [|done]. simplify_eq.
+    + rewrite thread_left. intros Hpoc.
+      destruct (event_eq_dec a b); [simplify_eq|].
+      apply step_left_ctxs in Hstepa.
+      destruct Hstepa as (k & e1' & e2' & e0 & Hk & -> & -> & Hstepa).
+      apply (step_left_some_in_context Hk) in Hstepb.
+      destruct Hstepb as (e1'' & -> & Hstepb).
+      eapply IHb; [apply Hstepa | apply Hstepb | apply n | ].
+      by eapply is_parent_or_child_cons_inv.
+    + rewrite thread_right. intros Hpoc.
+      by apply is_parent_or_child_cons_eq in Hpoc.
+  - rewrite thread_right. destruct a.
+    + eapply step_base_unique in Hstepb; [|done]. simplify_eq.
+    + rewrite thread_left. intros Hpoc.
+      by apply is_parent_or_child_cons_eq in Hpoc.
+    + rewrite thread_right. intros Hpoc.
+      destruct (event_eq_dec a b); [simplify_eq|].
+      apply step_right_ctxs in Hstepa.
+      destruct Hstepa as (k & e1' & e2' & e0 & Hk & -> & -> & Hstepa).
+      apply (step_right_some_in_context Hk) in Hstepb.
+      destruct Hstepb as (e1'' & -> & Hstepb).
+      eapply IHb; [apply Hstepa | apply Hstepb | apply n | ].
+      by eapply is_parent_or_child_cons_inv.
+Qed.
 
 Lemma eq_is_parent_or_child {a} :
   is_parent_or_child (thread a) (thread a).
@@ -1094,19 +1308,40 @@ Proof.
   intros x. by destruct x.
 Qed.
 
+Global Instance event_countable : Countable event.
+Proof.
+  set (enc :=
+    fix encv e :=
+      match e with
+      | Base b => GenLeaf (b)
+      | Left e' => GenNode 0 [encv e']
+      | Right e' => GenNode 1 [encv e']
+      end).
+  set (dec :=
+    fix decv v :=
+      match v with
+      | GenLeaf b => Base b
+      | GenNode 0 [e] => Left (decv e)
+      | GenNode 1 [e] => Right (decv e)
+      | GenNode _ _ => Base Join (* dummy *)
+      end).
+  refine (inj_countable' enc dec _). intros.
+  induction x; eauto; simpl; by f_equal.
+Qed.
+
 (* next events are events that could be scheduled next *)
 (* they are the first instruction of a thread that is running concurrently *)
 Fixpoint next_events_stateful
-  (p : trace) (n : gset base_event) (u : gset (list bool)) : gset base_event :=
+  (p : trace) (n : gset event) (u : gset (list bool)) : gset event :=
   match p with
   | [] => n
   | e :: p' =>
       if decide (set_Exists (is_parent_or_child (thread e)) u)
         then (next_events_stateful p' n ({[thread e]} ∪ u))
-        else (next_events_stateful p' ({[to_base e]} ∪ n) ({[thread e]} ∪ u))
+        else (next_events_stateful p' ({[e]} ∪ n) ({[thread e]} ∪ u))
   end.
 
-Definition next_events (p : trace) : gset base_event :=
+Definition next_events (p : trace) : gset event :=
   next_events_stateful p ∅ ∅.
 
 Lemma subset_next_events_stateful p n u :
@@ -1120,7 +1355,7 @@ Proof.
 Qed.
 
 Lemma next_events_head b t :
-  to_base b ∈ next_events (b :: t).
+  b ∈ next_events (b :: t).
 Proof.
   unfold next_events. simpl.
   destruct (decide (set_Exists (is_parent_or_child (thread b)) ∅));
@@ -1132,8 +1367,8 @@ Qed.
 (* Checks wether, given a list of active locks, a base event is locking,
    meaning that a Lock instruction is trying to get a lock that is locked,
    or that an Unlock instruction is trying to release a lock that is unlocked *)
-Definition is_locking (al : gset nat) (e : base_event) : Prop :=
-  match e with
+Definition is_locking (al : gset nat) (b : event) : Prop :=
+  match to_base b with
   | Lock l => l ∈ al
   | Unlock l => l ∉ al
   | Join => False
@@ -1195,7 +1430,7 @@ Proof. split; intros; done. Qed.
 (* Currently only used in unused lemmas *)
 Lemma valid_stateful_is_locking t b a :
   valid_stateful t a ->
-  valid_stateful (t ++ [b]) a \/ is_locking (alocks_stateful t a) (to_base b).
+  valid_stateful (t ++ [b]) a \/ is_locking (alocks_stateful t a) b.
 Proof.
   revert a. induction t as [|e t]; intros a Ht.
   - simpl. induction b; [|done..].
@@ -1210,7 +1445,7 @@ Qed.
 (* Currently unused *)
 Lemma valid_is_locking t b :
   valid t ->
-  valid (t ++ [b]) \/ is_locking (alocks t) (to_base b).
+  valid (t ++ [b]) \/ is_locking (alocks t) b.
 Proof. apply valid_stateful_is_locking. Qed.
 
 Global Instance cell_eq_dec : EqDecision cell.
@@ -1335,15 +1570,6 @@ Proof.
   - apply step_context_step; eauto with context.
 Qed.
 
-Lemma step_trace_heap_locks_none e1 h1 e2 h2:
-  step_trace e1 h1 e2 h2 None ->
-  heap_locks h1 = heap_locks h2.
-Proof.
-  intros Hsteps. remember None as n.
-  induction Hsteps; [ | | destruct b; [done|]..]; eauto.
-  destruct b; [done|]. by inv H.
-Qed.
-
 Lemma heap_locks_lock l h :
   heap_locks (<[l:=true]> h) = {[l]} ∪ heap_locks h.
 Proof.
@@ -1385,7 +1611,7 @@ Proof.
   induction Hsteps; [constructor | |].
   - eapply steps_step.
     + by apply step_trace_none_step.
-    + erewrite step_trace_heap_locks_none in Hvalid; eauto.
+    + erewrite step_trace_none_eq in Hvalid; eauto.
   - eapply steps_step.
     + eapply step_trace_some_step; [done|].
       by eapply valid_cons_inv.
@@ -1444,12 +1670,14 @@ Lemma steps_trace_locks_stateful e h e' h' ph :
   alocks_stateful ph (heap_locks h) = heap_locks h'.
 Proof.
   intros Hsteps Hvalid. induction Hsteps; [done|..].
-  - erewrite (step_trace_heap_locks_none _ _ _ _ H).
-    erewrite step_trace_heap_locks_none in Hvalid; eauto.
+  - erewrite (step_trace_none_eq H).
+    erewrite step_trace_none_eq in Hvalid; eauto.
   - rewrite <- IHHsteps.
     + by eapply step_trace_alocks.
     + by eapply step_trace_valid_stateful.
 Qed.
+
+
 
 Lemma steps_trace_locks e e' h' ph :
   steps_trace e ∅ e' h' ph ->
@@ -1461,29 +1689,6 @@ Proof.
   eapply steps_trace_locks_stateful; [done|].
   by rewrite heap_locks_empty.
 Qed.
-
-Lemma not_step_trace_val {v h1 e h2 t} :
-  ¬ step_trace (EVal v) h1 e h2 t.
-Proof.
-  intros Hstep. inv Hstep.
-  - inv H. inv H0.
-  - inv H0.
-Qed.
-
-Ltac unique_tac := repeat
-  match goal with
-  | H : ctx_trace _ |- _ => inv H
-  | H : step_trace (EVal _) _ _ _ _ |- _ => by apply not_step_trace_val in H
-  | H : pure_step_trace _ _ _ |- _ => inv H
-  | H : head_step_trace _ _ _ _ _ |- _ => inv H
-  | H : step_trace _ _ _ _ _ |- _ => inv H
-  | _ => intros || reflexivity
-  end.
-
-Lemma head_step_trace_unique {e1 h1 e2 h2 b} :
-  head_step_trace e1 h1 e2 h2 b ->
-  forall e' h' t, step_trace e1 h1 e' h' t -> t = option_map Base b.
-Proof. unique_tac. Qed.
 
 Lemma par_base_is_join {e1 e2 h1 e h2 b} :
   step_trace (EPar e1 e2) h1 e h2 (Some (Base b)) ->
@@ -1608,38 +1813,6 @@ Proof.
     intros Heq. simplify_eq.
 Qed.
 
-Lemma step_base_ctxs {e1 h1 e2 h2 b} :
-  step_trace e1 h1 e2 h2 (Some (Base b)) ->
-  exists k e e', ctxs_trace k /\
-    e1 = k e /\
-    e2 = k e' /\ 
-    head_step_trace e h1 e' h2 (Some b).
-Proof.
-  intros Hstep. remember (Some (Base b)) as bb.
-  induction Hstep; [ | | by destruct b0..].
-  - destruct b0; [|done]. simpl in Heqbb. simplify_eq.
-    exists (λ x, x), e, e'.
-    repeat split; auto with context.
-  - destruct (IHHstep Heqbb) as (k0 & e0 & e0' & Hctx0 & -> & -> & Hhead).
-    exists (λ x, k (k0 x)), e0, e0'.
-    repeat split; auto with context.
-Qed.
-
-Lemma ctxs_step_not_val {e1 h1 e2 h2 b k} :
-  ctxs_trace k ->
-  ¬ is_val e1 ->
-  step_trace (k e1) h1 e2 h2 b ->
-  exists e2', e2 = k e2' /\
-    step_trace e1 h1 e2' h2 b.
-Proof.
-  intros Hctx Hnval. revert e2.
-  induction Hctx; intros e2 Hstep; [eauto|].
-  apply (ctxs_not_val Hctx) in Hnval.
-  destruct (ctx_step_not_val H Hnval Hstep) as (e2' & -> & H').
-  destruct (IHHctx _ H') as (e3 & -> & H3).
-  eauto.
-Qed.
-
 (* Practise for step_trace_in_next_events with an easier conclusion *)
 Lemma steps_trace_in_trace {e1 h1 v h2 t} :
   steps_trace e1 h1 (EVal v) h2 t ->
@@ -1677,8 +1850,9 @@ Proof.
       * by eapply in_cons, IHt.
 Qed.
 
+(* Currently unused *)
 Lemma next_events_singleton {a b} :
-  to_base a = to_base b <-> to_base b ∈ next_events [a].
+  a = b <-> b ∈ next_events [a].
 Proof.
   split.
   - intros <-. apply next_events_head.
@@ -1706,36 +1880,68 @@ Proof.
   revert a n u. induction t; [done|]; intros b n u.
   simpl. destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
   - apply IHt.
-  - replace ({[to_base a]} ∪ (b ∪ n)) with (b ∪ ({[to_base a]} ∪ n));
+  - replace ({[a]} ∪ (b ∪ n)) with (b ∪ ({[a]} ∪ n));
     [|set_solver]. apply IHt.
 Qed.
 
-Inductive family : list bool -> list bool -> Prop :=
-  | family_poc a b : is_parent_or_child a b -> family a b
-  | family_trans a b c : is_parent_or_child a b -> family b c -> family a c.
-
-Lemma next_events_cons_iff {a n u t} :
-  to_base a ∈ next_events_stateful t n u
-  <->
-  ((to_base a ∈ n /\ (t = [] \/ set_Exists (family (thread a)) u)) \/
-    ¬ set_Exists (family (thread a)) u).
+Lemma next_events_in_or_empty {a n u t} :
+  a ∈ next_events_stateful t n u <->
+  a ∈ n \/ a ∈ next_events_stateful t ∅ u.
 Proof.
-Admitted.
+  split.
+  - intros Hnext. replace n with (n ∪ ∅) in Hnext by set_solver.
+    rewrite next_events_stateful_union in Hnext.
+    by apply elem_of_union.
+  - intros [Hin | Hin].
+    + by eapply elem_of_weaken, subset_next_events_stateful.
+    + by eapply elem_of_weaken, next_events_stateful_subseteq.
+Qed.
 
 Lemma next_events_cons {a b n u t} :
   ¬ is_parent_or_child (thread b) (thread a) ->
-  to_base b ∈ next_events_stateful t n u ->
-  to_base b ∈ next_events_stateful t ({[to_base a]} ∪ n) ({[thread a]} ∪ u).
+  b ∈ next_events_stateful t n u ->
+  b ∈ next_events_stateful t ({[a]} ∪ n) ({[thread a]} ∪ u).
 Proof.
   revert a b n u. induction t; intros b c n u Hpoc Hin.
   { rewrite elem_of_union. by right. }
-Admitted.
+  rewrite next_events_in_or_empty in Hin. destruct Hin as [Hin | Hin].
+  { eapply elem_of_weaken; [done|].
+    etransitivity; [apply subset_next_events_stateful|].
+    apply next_events_stateful_subseteq. set_solver. }
+  simpl in Hin. destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
+  - specialize (IHt _ _ _ _ Hpoc Hin).
+    rewrite next_events_in_or_empty in IHt. destruct IHt as [IHt | IHt]; [|simpl].
+    + rewrite union_empty_r elem_of_singleton in IHt. simplify_eq.
+      exfalso. apply Hpoc, eq_is_parent_or_child.
+    + destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u)));
+      rewrite next_events_in_or_empty; right;
+      replace ({[thread a]} ∪ ({[thread b]} ∪ u)) with
+        ({[thread b]} ∪ ({[thread a]} ∪ u)); try done; set_solver.
+  - rewrite next_events_in_or_empty in Hin. destruct Hin as [Hin | Hin].
+    + rewrite union_empty_r elem_of_singleton in Hin. simplify_eq. simpl.
+      destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u))).
+      * exfalso. destruct s as (x & Hu & Hx).
+        rewrite elem_of_union in Hu. destruct Hu as [Hb | Hu].
+        -- rewrite elem_of_singleton in Hb. by simplify_eq.
+        -- apply n0. by exists x.
+      * eapply elem_of_weaken; [by apply elem_of_singleton|].
+        etransitivity; [|apply subset_next_events_stateful].
+        set_solver.
+    + specialize (IHt _ _ _ _ Hpoc Hin).
+      rewrite next_events_in_or_empty in IHt. destruct IHt as [IHt | IHt]; [|simpl].
+      * rewrite union_empty_r elem_of_singleton in IHt. simplify_eq.
+        exfalso. apply Hpoc, eq_is_parent_or_child.
+      * destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u)));
+        rewrite next_events_in_or_empty; right;
+        replace ({[thread a]} ∪ ({[thread b]} ∪ u)) with
+          ({[thread b]} ∪ ({[thread a]} ∪ u)); try done; set_solver.
+Qed.
 
 (* Lemma used directly in steps_trace_heap_locks_stuck *)
 Lemma step_trace_in_next_events {e h1 v h2 t} :
   steps_trace e h1 (EVal v) h2 t ->
   forall e' h' b, step_trace e h1 e' h' (Some b) ->
-  to_base b ∈ next_events t.
+  b ∈ next_events t.
 Proof.
   revert e h1 v h2. induction t; intros e h1 v h2 Hsteps e' h' b Hstep.
   - exfalso. revert e' h' b Hstep. remember (EVal v) as ev. remember [] as t.
@@ -1748,9 +1954,9 @@ Proof.
     { by destruct s as (? & ? & ?). }
     replace (a :: t) with ([a] ++ t) in Hsteps; [|done].
     apply steps_split in Hsteps. destruct Hsteps as (ea & ha & Ha & Hsteps).
-    assert (Hnext : to_base b ∈ next_events t).
-    { destruct (steps_trace_event_postponed Hstep Ha) as (e3 & h3 & H3); [|eauto].
-      intros Hin. destruct Hin; simplify_eq. }
+    assert (Hnext : b ∈ next_events t).
+    { destruct (steps_trace_event_postponed Hstep Ha) as (e3 & h3 & H3);
+      [|by eapply IHt]. intros Hin. destruct Hin; simplify_eq. }
     remember [a] as la. revert e' h' Hstep; induction Ha;
     intros e' h' Hstep; simplify_eq.
     { destruct (step_trace_event_postponed Hstep H) as
@@ -2698,7 +2904,7 @@ Lemma head_step_to_step_trace {e h e' h'} :
   head_step e h e' h' ->
   exists t,
     step_trace e h e' h' t /\
-    forall b, t = Some b -> ¬ is_locking (heap_locks h) (to_base b).
+    forall b, t = Some b -> ¬ is_locking (heap_locks h) b.
 Proof.
   intros Hstep. inv Hstep.
   - inv H; [exists (option_map Base None); split;
@@ -2707,17 +2913,18 @@ Proof.
     simpl. intros b Heq Hlock. by simplify_eq.
   - eexists. split; [eauto with headstep|].
     simpl. intros b Heq Hlock. simplify_eq.
-    simpl in Hlock. destruct H as [Hnelem | Hfalse].
-    * eapply Hnelem, elem_of_weaken; [done|].
+    unfold is_locking in Hlock. simpl in Hlock.
+    destruct H as [Hnelem | Hfalse].
+    + eapply Hnelem, elem_of_weaken; [done|].
       apply dom_filter_subseteq.
-    * rewrite elem_of_dom in Hlock.
+    + rewrite elem_of_dom in Hlock.
       destruct Hlock as [x Hlock].
       apply map_filter_lookup_Some_1_2 in Hlock as Hl. simpl in Hl.
       apply map_filter_lookup_Some_1_1 in Hlock. simplify_eq.
   - eexists. split; [eauto with headstep|].
     simpl. intros b Heq Hlock. simplify_eq.
-    simpl in Hlock. rewrite not_elem_of_dom in Hlock.
-    rewrite map_filter_lookup_None in Hlock.
+    unfold is_locking in Hlock. simpl in Hlock.
+    rewrite not_elem_of_dom map_filter_lookup_None in Hlock.
     destruct Hlock as [? | Hlock]; [simplify_eq | by eapply Hlock].
 Qed.
 
@@ -2726,7 +2933,7 @@ Lemma step_to_step_trace {e h e' h'} :
   exists t,
     step_trace e h e' h' t /\
     forall b, t = Some b ->
-      ¬ is_locking (heap_locks h) (to_base b).
+      ¬ is_locking (heap_locks h) b.
 Proof.
   intros Hstep. inv Hstep.
   induction H; [by apply head_step_to_step_trace|].
@@ -2762,15 +2969,13 @@ Proof.
     (e' & Hnone & Hrest & Hin).
   exists e', h. repeat split.
   - by eapply steps_trace_valid_steps.
-  - About steps_trace_not_val. by eapply steps_trace_not_val.
-  - intros e'' h'' Hstep. About step_to_step_trace.
+  - by eapply steps_trace_not_val.
+  - intros e'' h'' Hstep.
     destruct (step_to_step_trace Hstep) as (t & Hstept & Ht).
-    destruct (Hin _ _ _ Hstept) as [b ->]. About step_trace_in_next_events.
+    destruct (Hin _ _ _ Hstept) as [b ->].
     apply (step_trace_in_next_events Hrest) in Hstept.
     by apply (Ht b eq_refl), Hlock.
 Qed.
-
-Print deadlock.
 
 Theorem trace_soundness (e : expr) (v : val) h' (t : trace) :
   steps_trace e ∅ (EVal v) h' t ->
