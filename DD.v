@@ -1120,176 +1120,35 @@ Lemma alocks_empty :
   alocks [] = ∅.
 Proof. done. Qed.
 
-(* the thread is the combination of left/right of an event,
-   represented as a list of bools *)
-Fixpoint thread_stateful (e : event) (a : list bool) : list bool :=
-  match e with
-  | Base _ => a
-  | Left b => thread_stateful b (a ++ [false])
-  | Right b => thread_stateful b (a ++ [true])
-  end.
-
-Definition thread (e : event) : list bool := thread_stateful e [].
-
-Lemma thread_stateful_cons e b a :
-  thread_stateful e (b :: a) = b :: thread_stateful e a.
-Proof. revert b a. induction e; intros b' a; eauto. Qed.
-
-Lemma thread_left (e : event) :
-  thread (Left e) = false :: thread e.
-Proof.
-  unfold thread. simpl.
-  apply thread_stateful_cons.
-Qed.
-
-Lemma thread_right (e : event) :
-  thread (Right e) = true :: thread e.
-Proof.
-  unfold thread. simpl.
-  apply thread_stateful_cons.
-Qed.
-
-Fixpoint is_parent_or_child' (e e' : event) : Prop :=
-  match (e, e') with
-  | (Base _, _) => True
-  | (_, Base _) => True
-  | (Left b, Left b') => is_parent_or_child' b b'
-  | (Right b, Right b') => is_parent_or_child' b b'
-  | _ => False
-  end.
-
-Definition is_parent_or_child (tid tid' : list bool) : Prop :=
-  (tid `prefix_of` tid') \/ (tid' `prefix_of` tid).
-
-Lemma is_parent_or_child_cons a b c :
-  is_parent_or_child a b ->
-  is_parent_or_child (c :: a) (c :: b).
-Proof.
-  intros [Hpoc | Hpoc]; [left | right]; by apply prefix_cons.
-Qed.
-
-Lemma is_parent_or_child_cons_inv a b c :
-  is_parent_or_child (c :: a) (c :: b) ->
-  is_parent_or_child a b.
-Proof.
-  intros [Hpoc | Hpoc]; [left | right]; by eapply prefix_cons_inv_2.
-Qed.
-
-Lemma is_parent_or_child_cons_eq a b c d :
-  is_parent_or_child (c :: a) (d :: b) ->
-  c = d.
-Proof.
-  intros [Hpoc | Hpoc]; [|symmetry]; by eapply prefix_cons_inv_1.
-Qed.
-
-Lemma is_parent_or_child_equiv (e e' : event) :
-  is_parent_or_child' e e' <-> is_parent_or_child (thread e) (thread e').
-Proof.
-  revert e'. induction e.
-  - unfold thread. simpl. intros e'.
-    split; [|done].
-    intros _. left. apply prefix_nil.
-  - unfold thread. intros e'.
-    destruct e'; simpl.
-    + split; [|done].
-      intros _. right. apply prefix_nil.
-    + split.
-      * intros H. rewrite IHe in H.
-        rewrite! thread_stateful_cons.
-        by apply is_parent_or_child_cons.
-      * intros H.
-        rewrite! thread_stateful_cons in H.
-        apply is_parent_or_child_cons_inv in H.
-        by rewrite IHe.
-    + split; [done|].
-      intros H.
-      rewrite! thread_stateful_cons in H.
-      by apply is_parent_or_child_cons_eq in H.
-  - unfold thread. intros e'.
-    destruct e'; simpl.
-    + split; [|done].
-      intros _. right. apply prefix_nil.
-    + split; [done|].
-      intros H.
-      rewrite! thread_stateful_cons in H.
-      by apply is_parent_or_child_cons_eq in H.
-    + split.
-      * intros H. rewrite IHe in H.
-        rewrite! thread_stateful_cons.
-        by apply is_parent_or_child_cons.
-      * intros H.
-        rewrite! thread_stateful_cons in H.
-        apply is_parent_or_child_cons_inv in H.
-        by rewrite IHe.
-Qed.
-
-Lemma is_parent_or_child_can_swap (e e' : event) :
-  is_parent_or_child' e e' <-> ¬ can_swap e e'.
-Proof.
-  revert e'. induction e; split; simpl.
-  - intros _ Hswap. inv Hswap.
-  - done.
-  - destruct e'.
-    + intros _ Hswap. inv Hswap.
-    + intros Hpoc Hswap. inv Hswap.
-      by rewrite IHe in Hpoc.
-    + done.
-  - intros Hswap. destruct e'.
-    + done.
-    + rewrite IHe. intros Hswap'.
-      apply Hswap. by constructor.
-    + apply Hswap. constructor.
-  - destruct e'.
-    + intros _ Hswap. inv Hswap.
-    + done.
-    + intros Hpoc Hswap. inv Hswap.
-      by rewrite IHe in Hpoc.
-  - intros Hswap. destruct e'.
-    + done.
-    + apply Hswap. constructor.
-    + rewrite IHe. intros Hswap'.
-      apply Hswap. by constructor.
-Qed.
-
-Lemma step_not_parent_or_child {e h e' h' e'' h'' a b} :
+Lemma step_can_swap {e h e' h' e'' h'' a b} :
   step_trace e h e' h' (Some a) ->
   step_trace e h e'' h'' (Some b) ->
   a ≠ b ->
-  ¬ is_parent_or_child (thread a) (thread b).
+  can_swap a b.
 Proof.
   revert e h e' h' a e'' h''.
   induction b; intros e h e' h' a e'' h'' Hstepa Hstepb Hne.
   - eapply step_base_unique in Hstepa; [|done]. simplify_eq.
-  - rewrite thread_left. destruct a.
+  - destruct a.
     + eapply step_base_unique in Hstepb; [|done]. simplify_eq.
-    + rewrite thread_left. intros Hpoc.
+    + constructor.
       destruct (event_eq_dec a b); [simplify_eq|].
       apply step_left_ctxs in Hstepa.
       destruct Hstepa as (k & e1' & e2' & e0 & Hk & -> & -> & Hstepa).
       apply (step_left_some_in_context Hk) in Hstepb.
       destruct Hstepb as (e1'' & -> & Hstepb).
-      eapply IHb; [apply Hstepa | apply Hstepb | apply n | ].
-      by eapply is_parent_or_child_cons_inv.
-    + rewrite thread_right. intros Hpoc.
-      by apply is_parent_or_child_cons_eq in Hpoc.
-  - rewrite thread_right. destruct a.
+      eapply IHb; [apply Hstepa | apply Hstepb | apply n].
+    + constructor.
+  - destruct a.
     + eapply step_base_unique in Hstepb; [|done]. simplify_eq.
-    + rewrite thread_left. intros Hpoc.
-      by apply is_parent_or_child_cons_eq in Hpoc.
-    + rewrite thread_right. intros Hpoc.
+    + constructor.
+    + constructor.
       destruct (event_eq_dec a b); [simplify_eq|].
       apply step_right_ctxs in Hstepa.
       destruct Hstepa as (k & e1' & e2' & e0 & Hk & -> & -> & Hstepa).
       apply (step_right_some_in_context Hk) in Hstepb.
       destruct Hstepb as (e1'' & -> & Hstepb).
-      eapply IHb; [apply Hstepa | apply Hstepb | apply n | ].
-      by eapply is_parent_or_child_cons_inv.
-Qed.
-
-Lemma eq_is_parent_or_child {a} :
-  is_parent_or_child (thread a) (thread a).
-Proof.
-  unfold is_parent_or_child. by left.
+      eapply IHb; [apply Hstepa | apply Hstepb | apply n].
 Qed.
 
 Global Instance base_event_countable : Countable base_event.
@@ -1329,39 +1188,47 @@ Proof.
   induction x; eauto; simpl; by f_equal.
 Qed.
 
+Global Instance forall_can_swap_dec (e : event) (u : gset event) :
+  Decision (set_Forall (can_swap e) u).
+Proof.
+  apply set_Forall_dec.
+  induction e; intros e'.
+  - right. intros Hswap. inv Hswap.
+  - destruct e'.
+    + right. intros Hswap. inv Hswap.
+    + destruct (IHe e').
+      * left. by constructor.
+      * right. intros Hswap. by inv Hswap.
+    + left. constructor.
+  - destruct e'.
+    + right. intros Hswap. inv Hswap.
+    + left. constructor.
+    + destruct (IHe e').
+      * left. by constructor.
+      * right. intros Hswap. by inv Hswap.
+Qed.
+
 (* next events are events that could be scheduled next *)
 (* they are the first instruction of a thread that is running concurrently *)
 Fixpoint next_events_stateful
-  (p : trace) (n : gset event) (u : gset (list bool)) : gset event :=
+  (p : trace) (u : gset event) : gset event :=
   match p with
-  | [] => n
+  | [] => ∅
   | e :: p' =>
-      if decide (set_Exists (is_parent_or_child (thread e)) u)
-        then (next_events_stateful p' n ({[thread e]} ∪ u))
-        else (next_events_stateful p' ({[e]} ∪ n) ({[thread e]} ∪ u))
+      if decide (set_Forall (can_swap e) u)
+        then {[e]} ∪ (next_events_stateful p' ({[e]} ∪ u))
+        else (next_events_stateful p' ({[e]} ∪ u))
   end.
 
 Definition next_events (p : trace) : gset event :=
-  next_events_stateful p ∅ ∅.
-
-Lemma subset_next_events_stateful p n u :
-  n ⊆ next_events_stateful p n u.
-Proof.
-  revert n u.
-  induction p; [done|]; intros n u. simpl.
-  destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
-  - apply IHp.
-  - etransitivity; [|apply IHp]. set_solver.
-Qed.
+  next_events_stateful p ∅.
 
 Lemma next_events_head b t :
   b ∈ next_events (b :: t).
 Proof.
   unfold next_events. simpl.
-  destruct (decide (set_Exists (is_parent_or_child (thread b)) ∅));
-  [by apply set_Exists_empty in s|].
-  simpl. eapply elem_of_weaken; [|apply subset_next_events_stateful].
-  set_solver.
+  destruct (decide (set_Forall (can_swap b) ∅)); [set_solver|].
+  exfalso. apply n, set_Forall_empty.
 Qed.
 
 (* Checks wether, given a list of active locks, a base event is locking,
@@ -1850,91 +1717,26 @@ Proof.
       * by eapply in_cons, IHt.
 Qed.
 
-(* Currently unused *)
-Lemma next_events_singleton {a b} :
-  a = b <-> b ∈ next_events [a].
+Lemma next_events_cons {a b u t} :
+  can_swap b a ->
+  b ∈ next_events_stateful t u ->
+  b ∈ next_events_stateful t ({[a]} ∪ u).
 Proof.
-  split.
-  - intros <-. apply next_events_head.
-  - intros Hnext. unfold next_events in Hnext. simpl in Hnext.
-    destruct (decide (set_Exists (is_parent_or_child (thread a)) ∅));
-    [by destruct s as (? & ? & ?)|].
-    rewrite union_empty_r in Hnext. symmetry.
-    by apply elem_of_singleton_1 in Hnext.
-Qed.
-
-(* Currently unused *)
-Lemma next_events_stateful_subseteq {n n' u t} :
-  n ⊆ n' ->
-  next_events_stateful t n u ⊆ next_events_stateful t n' u.
-Proof.
-  revert n n' u. induction t; [done|]; intros n n' u Hsub.
-  simpl. destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
-  - by apply IHt.
-  - apply IHt. set_solver.
-Qed.
-
-Lemma next_events_stateful_union {a n u t} :
-  next_events_stateful t (a ∪ n) u = a ∪ (next_events_stateful t n u).
-Proof.
-  revert a n u. induction t; [done|]; intros b n u.
-  simpl. destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
-  - apply IHt.
-  - replace ({[a]} ∪ (b ∪ n)) with (b ∪ ({[a]} ∪ n));
-    [|set_solver]. apply IHt.
-Qed.
-
-Lemma next_events_in_or_empty {a n u t} :
-  a ∈ next_events_stateful t n u <->
-  a ∈ n \/ a ∈ next_events_stateful t ∅ u.
-Proof.
-  split.
-  - intros Hnext. replace n with (n ∪ ∅) in Hnext by set_solver.
-    rewrite next_events_stateful_union in Hnext.
-    by apply elem_of_union.
-  - intros [Hin | Hin].
-    + by eapply elem_of_weaken, subset_next_events_stateful.
-    + by eapply elem_of_weaken, next_events_stateful_subseteq.
-Qed.
-
-Lemma next_events_cons {a b n u t} :
-  ¬ is_parent_or_child (thread b) (thread a) ->
-  b ∈ next_events_stateful t n u ->
-  b ∈ next_events_stateful t ({[a]} ∪ n) ({[thread a]} ∪ u).
-Proof.
-  revert a b n u. induction t; intros b c n u Hpoc Hin.
-  { rewrite elem_of_union. by right. }
-  rewrite next_events_in_or_empty in Hin. destruct Hin as [Hin | Hin].
-  { eapply elem_of_weaken; [done|].
-    etransitivity; [apply subset_next_events_stateful|].
-    apply next_events_stateful_subseteq. set_solver. }
-  simpl in Hin. destruct (decide (set_Exists (is_parent_or_child (thread a)) u)).
-  - specialize (IHt _ _ _ _ Hpoc Hin).
-    rewrite next_events_in_or_empty in IHt. destruct IHt as [IHt | IHt]; [|simpl].
-    + rewrite union_empty_r elem_of_singleton in IHt. simplify_eq.
-      exfalso. apply Hpoc, eq_is_parent_or_child.
-    + destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u)));
-      rewrite next_events_in_or_empty; right;
-      replace ({[thread a]} ∪ ({[thread b]} ∪ u)) with
-        ({[thread b]} ∪ ({[thread a]} ∪ u)); try done; set_solver.
-  - rewrite next_events_in_or_empty in Hin. destruct Hin as [Hin | Hin].
-    + rewrite union_empty_r elem_of_singleton in Hin. simplify_eq. simpl.
-      destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u))).
-      * exfalso. destruct s as (x & Hu & Hx).
-        rewrite elem_of_union in Hu. destruct Hu as [Hb | Hu].
-        -- rewrite elem_of_singleton in Hb. by simplify_eq.
-        -- apply n0. by exists x.
-      * eapply elem_of_weaken; [by apply elem_of_singleton|].
-        etransitivity; [|apply subset_next_events_stateful].
-        set_solver.
-    + specialize (IHt _ _ _ _ Hpoc Hin).
-      rewrite next_events_in_or_empty in IHt. destruct IHt as [IHt | IHt]; [|simpl].
-      * rewrite union_empty_r elem_of_singleton in IHt. simplify_eq.
-        exfalso. apply Hpoc, eq_is_parent_or_child.
-      * destruct (decide (set_Exists (is_parent_or_child (thread a)) ({[thread b]} ∪ u)));
-        rewrite next_events_in_or_empty; right;
-        replace ({[thread a]} ∪ ({[thread b]} ∪ u)) with
-          ({[thread b]} ∪ ({[thread a]} ∪ u)); try done; set_solver.
+  revert a b u. induction t; intros b c u Hswap Hin; [set_solver|].
+  simpl in *. destruct (decide (set_Forall (can_swap a) u)).
+  - rewrite elem_of_union in Hin. destruct Hin as [Hin | Hin].
+    + apply elem_of_singleton in Hin. simplify_eq.
+      destruct (decide (set_Forall (can_swap a) ({[b]} ∪ u))); [set_solver|].
+      exfalso. apply n. apply set_Forall_union; [|done].
+      by rewrite set_Forall_singleton.
+    + specialize (IHt _ _ _ Hswap Hin).
+      replace ({[b]} ∪ ({[a]} ∪ u)) with ({[a]} ∪ ({[b]} ∪ u)) in IHt;
+      [destruct (decide (set_Forall (can_swap a) ({[b]} ∪ u)))|];
+      set_solver.
+  - specialize (IHt _ _ _ Hswap Hin).
+    replace ({[b]} ∪ ({[a]} ∪ u)) with ({[a]} ∪ ({[b]} ∪ u)) in IHt;
+    [destruct (decide (set_Forall (can_swap a) ({[b]} ∪ u)))|];
+    set_solver.
 Qed.
 
 (* Lemma used directly in steps_trace_heap_locks_stuck *)
@@ -1950,19 +1752,18 @@ Proof.
     + destruct (step_trace_event_postponed Hstep H) as (e'' & h'' & H''); eauto.
   - destruct (event_eq_dec b a) as [-> | Hne]; [apply next_events_head|].
     unfold next_events. simpl.
-    destruct (decide (set_Exists (is_parent_or_child (thread a)) ∅)).
-    { by destruct s as (? & ? & ?). }
+    destruct (decide (set_Forall (can_swap a) ∅)).
+    2:{ exfalso. apply n, set_Forall_empty. }
     replace (a :: t) with ([a] ++ t) in Hsteps; [|done].
     apply steps_split in Hsteps. destruct Hsteps as (ea & ha & Ha & Hsteps).
-    assert (Hnext : b ∈ next_events t).
-    { destruct (steps_trace_event_postponed Hstep Ha) as (e3 & h3 & H3);
-      [|by eapply IHt]. intros Hin. destruct Hin; simplify_eq. }
-    remember [a] as la. revert e' h' Hstep; induction Ha;
-    intros e' h' Hstep; simplify_eq.
+    destruct (steps_trace_event_postponed Hstep Ha) as (e3 & h3 & H3);
+    [set_solver|]. remember [a] as la. revert e' h' Hstep;
+    induction Ha; intros e' h' Hstep; simplify_eq.
     { destruct (step_trace_event_postponed Hstep H) as
       (ef & hf & Hf); by [|eapply IHHa]. }
-    eapply next_events_cons; [|done].
-    by eapply step_not_parent_or_child.
+    eapply elem_of_union_r, next_events_cons.
+    + by eapply step_can_swap.
+    + by eapply IHt.
 Qed.
 
 (* TODO: Move everything about NoneEvent and none_steps_trace to different file *)
