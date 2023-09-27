@@ -482,7 +482,6 @@ Notation lock_heap := (gmap nat bool).
 
 Inductive expr :=
   | EVal : val -> expr
-  | EAmb : expr
   | EVar : string -> expr
   | EPair : expr -> expr -> expr
   | EFst : expr -> expr
@@ -499,7 +498,6 @@ Inductive expr :=
 Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   match e with
   | EVal _ => e
-  | EAmb => EAmb
   | EVar y => if string_dec y x then EVal w else EVar y
   | EPair e1 e2 => EPair (subst x w e1) (subst x w e2)
   | EFst e' => EFst (subst x w e')
@@ -518,7 +516,6 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
 
 (* Small steps that don't alter the heap *)
 Inductive pure_step : expr -> expr -> Prop :=
-  | Amb_step n : pure_step EAmb (EVal (VNat n))
   | Pair_step v1 v2 :
       pure_step (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2))
   | Fst_step v1 v2 :
