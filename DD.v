@@ -1872,10 +1872,10 @@ Proof.
     + f_equal. eauto.
 Qed.
 
-Ltac finish_diamond H k' :=
-  destruct H as (ef & hf & [f Hf1] & Hf2);
-  left; do 2 eexists; repeat split; [eexists|];
-  eapply ctx_step_trace with (k := k'); eauto with context.
+Ltac finish_diamond H H' :=
+  destruct (H _ H') as [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]]; [|tauto];
+  left; do 2 eexists;
+  eauto using step_trace.
 
 Lemma step_trace_diamond {e0 e1 e2 h1 h2 b} :
   step_trace e0 h1 e1 h1 None ->
@@ -1891,17 +1891,12 @@ Proof.
     tauto.
   - apply ctx_step_not_val in Hstep; [ | done | ].
     + destruct Hstep as (e2' & -> & Hstep).
-      destruct (IHHstep' _ Hstep) as
-        [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]]; [|tauto].
-      left. exists (k ef), hf. eauto using step_trace.
+      finish_diamond IHHstep' Hstep.
     + by eapply step_trace_not_val.
   - inv Hstep.
     + inv H4. inv H0.
     + inv H0.
-    + destruct b0; [done|].
-      destruct (IHHstep' _ H4) as
-        [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]]; [|tauto].
-      left. exists (EPar ef e2), hf. eauto using step_trace.
+    + destruct b0; [done|]. finish_diamond IHHstep' H4.
     + left. exists (EPar e1' e2'), h'. destruct b0; [done | split].
       * eauto using step_trace.
       * by eapply par_r_step_trace, step_trace_none_heap_indifferent.
@@ -1911,16 +1906,13 @@ Proof.
     + left. exists (EPar e1' e2'), h'. destruct b0; [done | split].
       * eauto using step_trace.
       * by eapply par_l_step_trace, step_trace_none_heap_indifferent.
-    + destruct b0; [done|].
-      destruct (IHHstep' _ H4) as
-        [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]]; [|tauto].
-      left. exists (EPar e1 ef), hf. eauto using step_trace.
+    + destruct b0; [done|]. finish_diamond IHHstep' H4.
 Qed.
 
 Lemma nstep_triangle {n e h v hv e' h'} :
   nsteps step_event (S n) (e, h) (EVal v, hv) ->
   step_trace e h e' h' None ->
-  exists v', nsteps step_event n (e', h') (EVal v', hv).
+  nsteps step_event n (e', h') (EVal v, hv).
 Proof.
   intros Hn Hstep. remember (S n) as Sn.
   remember (e, h) as eh. remember (EVal v, hv) as ehv.
@@ -1935,15 +1927,14 @@ Proof.
       + by apply step_left_not_val in Hb.
       + by apply step_right_not_val in Hb.
     - destruct (step_trace_val_unique Hb Hstep) as (-> & -> & _).
-      exists v. constructor. }
+      constructor. }
   assert (Heq := step_trace_none_eq Hstep). simplify_eq.
   destruct H as [b H].
   destruct (step_trace_diamond Hstep H) as
     [(em & hm & Hstep' & Hstepm) | [Heq ->]].
   - specialize (IHHn e'' h'' v hv m  em hm eq_refl eq_refl eq_refl Hstepm).
-    destruct IHHn as [v' Hv']. exists v'.
     econstructor; [|done]. by exists b.
-  - simplify_eq. by exists v.
+  - by simplify_eq.
 Qed.
 
 Lemma step_no_event_eq {e h e' h'} :
@@ -1969,8 +1960,7 @@ Proof.
   - inv Hn. constructor. intros [e h] Hstep.
     by apply not_step_trace_val in Hstep.
   - constructor. intros [e1 h1] Hstep1. simpl in Hstep1.
-    destruct (nstep_triangle Hn Hstep1) as [v' Hv'].
-    by eapply IHn.
+    by eapply IHn, nstep_triangle.
 Qed.
 
 Lemma steps_trace_diamond {e h e1 e2 h2 t} :
@@ -2326,54 +2316,3 @@ Proof.
   erewrite steps_trace_locks in Hdeadlock; [|done..].
   by eapply steps_trace_heap_locks_stuck.
 Qed.
-
-(*
-  1) Verslag
-    1a) Introduction
-        -- Contributions incl Differences with CISL paper (globally)
-    1b) Preliminaries (no Coq)
-        -- Separation logic
-        -- ISL
-        -- CISL (High-level overview)
-    1c) CISL_DC (no Coq)
-    1d) CISL_DD (no Coq)
-        -- Trace based notion of deadlock
-    1e) Coq
-        -- CISL_DC
-        -- CISL_DD
-    1f) Related Work
-        -- CISL paper incl differences (detailed)
-        -- Other formal definition of deadlock
-    1g) Conclusion & Future work
-        -- Locks + state using Iris locks specs
-        -- Deadlock definition without permutations
-  2) Prove lemmas
-*)
-
-(* let l = alloc(lock(false)) in
-    acquire l; || //while(true);
-    acquire l; || release l;
-    true + 0   ||
-
-  What does CISL say about the above program (with/without while(true))?
-
-Possible acquire states:
- 1) acquire v, where v does not point to a lock
- 2) acquire v, deadlock in thread, no other threads
- 3) acquire v, other threads exist
- 4) acquire v, all threads are doing an acquire on a locked lock
-*)
-
-(*
-Possible definitions of deadlock:
-  For all possible steps, a lock remains locked
-    - Starvation (Not necessarily deadlock if infinite loops)
-  Cannot step, but not is_error
-    - Not is_error is difficult to prove
-    - Use correctness logic to prove typed -> correct,
-      then typed /\ not step -> deadlock
-  Histories
-    - Locks don't lock, but add event to history
-    - CISL paper only uses non-deterministic choice and loops
-    - Generalizing to deterministic may introduce bugs
-*)
