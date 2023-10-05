@@ -54,6 +54,7 @@ the events that have happened during the execution of the program
 Notation Join := perm.Join.
 
 Inductive pure_step_trace : expr -> expr -> option base_event -> Prop :=
+  | Amb_step_trace n : pure_step_trace EAmb (EVal (VNat n)) None
   | Pair_step_trace v1 v2 :
       pure_step_trace (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2)) None
   | Fst_step_trace v1 v2 :
@@ -778,60 +779,7 @@ Proof.
     by repeat eexists.
 Qed.
 
-(* Currently unused *)
-Lemma ctx_trace_step_left e h e' h' t k :
-  ctx_trace k ->
-  ¬ is_val e ->
-  step_trace (k e) h e' h' (Some (Left t)) ->
-  exists e0, e' = k e0.
-Proof.
-  intros Hctx Hnval Hstep.
-  inv Hstep; [by destruct b | .. | by destruct b].
-  - apply ctx_trace_unique in H; try done.
-    + destruct H; simplify_eq. by eexists.
-    + by eapply step_trace_not_val.
-  - inv Hctx.
-Qed.
-
-(* Currently unused *)
-Lemma ctx_trace_step_right e h e' h' t k :
-  ctx_trace k ->
-  ¬ is_val e ->
-  step_trace (k e) h e' h' (Some (Right t)) ->
-  exists e0, e' = k e0.
-Proof.
-  intros Hctx Hnval Hstep.
-  inv Hstep; try by destruct b.
-  - apply ctx_trace_unique in H; try done.
-    + destruct H; simplify_eq. by eexists.
-    + by eapply step_trace_not_val.
-  - inv Hctx.
-Qed.
-
-(* Currently unused *)
-Lemma step_left_not_val e h e' h' t :
-  step_trace e h e' h' (Some (Left t)) ->
-  ¬ is_val e'.
-Proof.
-  intros Hstep.
-  induction e'; try tauto.
-  inv Hstep.
-  - by destruct b.
-  - by apply not_is_val_ctx1, ctx_trace_ctx1.
-Qed.
-
-(* Currently unused *)
-Lemma step_right_not_val e h e' h' t :
-  step_trace e h e' h' (Some (Right t)) ->
-  ¬ is_val e'.
-Proof.
-  intros Hstep.
-  induction e'; try tauto.
-  inv Hstep.
-  - by destruct b.
-  - by apply not_is_val_ctx1, ctx_trace_ctx1.
-Qed.
-
+(* Duplicate of steps_left, refactor *)
 Lemma steps_left_map e h e' h' t t' {ek} :
   steps_trace e h e' h' t ->
   t' = map Left t ->
@@ -844,6 +792,7 @@ Proof.
     by apply par_l_step_trace_some.
 Qed.
 
+(* Duplicate of steps_right, refactor *)
 Lemma steps_right_map e h e' h' t t' {ek}:
   steps_trace e h e' h' t ->
   t' = map Right t ->
@@ -1015,8 +964,8 @@ Proof. unique_tac. Qed.
 Lemma head_step_trace_uniquer {e1 h1 e2 h2 b} :
   head_step_trace e1 h1 e2 h2 b ->
   forall e' h' t, step_trace e1 h1 e' h' t ->
-    e' = e2 /\ h' = h2 /\ t = option_map Base b.
-Proof. unique_tac. Qed.
+    (e' = e2 \/ (is_val e2 /\ is_val e')) /\ h' = h2 /\ t = option_map Base b.
+Proof. unique_tac; try tauto. by right. Qed.
 
 Lemma step_base_unique {e1 h1 e2 h2 b} :
   step_trace e1 h1 e2 h2 (Some (Base b)) ->
@@ -1237,6 +1186,60 @@ Proof.
   exfalso. apply n, set_Forall_empty.
 Qed.
 
+Lemma next_events_stateful_acc_eq {u u' t} :
+  u = u' ->
+  next_events_stateful t u = next_events_stateful t u'.
+Proof.
+  intros Heq. by subst.
+Qed.
+
+Ltac perm_tac :=
+  repeat match goal with
+  | H : ¬ set_Forall _ _ |- False => apply H
+  | |- set_Forall _ _ => intros z HZ
+  | H : _ ∈ _ ∪ _ |- _ => rewrite elem_of_union in H
+  | H : _ ∈ {[_]} |- _ => rewrite elem_of_singleton in H; simplify_eq
+  | H : _ \/ _ |- _ => destruct H
+  | H : can_swap ?x ?y |- can_swap ?y ?x => apply can_swap_symm
+  | H : set_Forall (can_swap ?x) (_ ∪ ?u),
+    H' : ?z ∈ ?u |- can_swap ?x ?z => apply H, elem_of_union_r
+  | |- _ => eauto
+  end.
+
+Lemma next_events_perm1 t t' u :
+  perm1 t t' ->
+  next_events_stateful t u = next_events_stateful t' u.
+Proof.
+  intros Hperm. revert u.
+  induction Hperm; intros u.
+  - done.
+  - simpl.
+    destruct (decide (set_Forall (can_swap x) u)).
+    + by rewrite IHHperm.
+    + by rewrite IHHperm.
+  - simpl.
+    destruct (decide (set_Forall (can_swap x) u));
+    destruct (decide (set_Forall (can_swap y) u));
+    destruct (decide (set_Forall (can_swap y) ({[x]} ∪ u)));
+    destruct (decide (set_Forall (can_swap x) ({[y]} ∪ u)));
+    try (by (exfalso; perm_tac));
+    replace ({[y]} ∪ ({[x]} ∪ u)) with (({[x]} ∪ ({[y]} ∪ u)));
+    set_solver || exfalso.
+    + apply n0. perm_tac.
+    + apply n0. perm_tac.
+    + apply n. perm_tac.
+Qed.
+
+Lemma next_events_perm t t' :
+  perm t t' ->
+  next_events t = next_events t'.
+Proof.
+  intros Hperm. induction Hperm.
+  - by apply next_events_perm1.
+  - rewrite <- IHHperm.
+    by apply next_events_perm1.
+Qed.
+
 (* Checks wether, given a list of active locks, a base event is locking,
    meaning that a Lock instruction is trying to get a lock that is locked,
    or that an Unlock instruction is trying to release a lock that is unlocked *)
@@ -1299,27 +1302,6 @@ Proof. split; intros; done. Qed.
 Lemma valid_to_base_cons_iff b t a :
   valid_stateful (b :: t) a <-> valid_stateful (Base (to_base b) :: t) a.
 Proof. split; intros; done. Qed.
-
-(* Currently only used in unused lemmas *)
-Lemma valid_stateful_is_locking t b a :
-  valid_stateful t a ->
-  valid_stateful (t ++ [b]) a \/ is_locking (alocks_stateful t a) b.
-Proof.
-  revert a. induction t as [|e t]; intros a Ht.
-  - simpl. induction b; [|done..].
-    destruct b as [v|v|];
-    [destruct (decide (v ∈ a))..|]; simpl; tauto.
-  - simpl in Ht. induction e; [|tauto..].
-    destruct b0; simpl in Ht;
-    [destruct (IHt _ (proj2 Ht)).. | destruct (IHt _ Ht)];
-    simpl; tauto.
-Qed.
-
-(* Currently unused *)
-Lemma valid_is_locking t b :
-  valid t ->
-  valid (t ++ [b]) \/ is_locking (alocks t) b.
-Proof. apply valid_stateful_is_locking. Qed.
 
 Global Instance cell_eq_dec : EqDecision cell.
 Proof. solve_decision. Defined.
@@ -1550,8 +1532,6 @@ Proof.
     + by eapply step_trace_valid_stateful.
 Qed.
 
-
-
 Lemma steps_trace_locks e e' h' ph :
   steps_trace e ∅ e' h' ph ->
   valid ph ->
@@ -1565,11 +1545,12 @@ Qed.
 
 Lemma par_base_is_join {e1 e2 h1 e h2 b} :
   step_trace (EPar e1 e2) h1 e h2 (Some (Base b)) ->
-  b = Join.
+  exists v1 v2, e1 = EVal v1 /\ e2 = EVal v2 /\
+    e = EVal (VPair v1 v2) /\ b = Join.
 Proof.
   intros Hstep. inv Hstep.
   - destruct b0; [|done]. simpl in H. simplify_eq.
-    inv H4. by inv H.
+    inv H4. inv H. by do 2 eexists.
   - inv H0.
   - by destruct b0.
   - by destruct b0.
@@ -1586,7 +1567,9 @@ Proof.
     destruct (step_none_without_context H) as
       [(? & -> & _) | (? & -> & _)]; eauto.
   - destruct b; [|apply elem_of_list_further..].
-    + apply par_base_is_join in H. subst. apply elem_of_list_here.
+    + apply par_base_is_join in H.
+      destruct H as (_ & _ & _ & _ & _ & ->).
+      apply elem_of_list_here.
     + destruct (step_left_some_without_context H) as (e & -> & _). eauto.
     + destruct (step_right_some_without_context H) as (e & -> & _). eauto.
 Qed.
@@ -1686,43 +1669,6 @@ Proof.
     intros Heq. simplify_eq.
 Qed.
 
-(* Practise for step_trace_in_next_events with an easier conclusion *)
-Lemma steps_trace_in_trace {e1 h1 v h2 t} :
-  steps_trace e1 h1 (EVal v) h2 t ->
-  forall e' h' b, step_trace e1 h1 e' h' (Some b) ->
-  In b t.
-Proof.
-  revert e1 h1 v h2. induction t; intros e1 h1 v h2 Hsteps e' h' b Hstep.
-  - exfalso. revert e' h' b Hstep. remember (EVal v) as ev. remember [] as t.
-    induction Hsteps; simplify_eq; intros e' h' b Hstep.
-    + by eapply not_step_trace_val.
-    + destruct (step_trace_event_postponed Hstep H) as (e'' & h'' & H''); eauto.
-  - destruct b.
-    + destruct (step_base_ctxs Hstep) as (k & eb & eb' & Hctx & -> & -> & Hhead).
-      assert (Heq: Base b = a); [clear IHt | subst; apply in_eq].
-      inv Hsteps.
-      * assert (Hnval := step_trace_not_val _ _ _ _ _
-                (head_step_trace_some _ _ _ _ _ Hhead)).
-        destruct (ctxs_step_not_val Hctx Hnval H) as (e2' & -> & H').
-        by apply (head_step_trace_unique Hhead) in H'.
-      * assert (Hnval := step_trace_not_val _ _ _ _ _
-                (head_step_trace_some _ _ _ _ _ Hhead)).
-        destruct (ctxs_step_not_val Hctx Hnval H5) as (e2' & -> & H').
-        apply (head_step_trace_unique Hhead) in H'. simpl in H'. by simplify_eq.
-    + destruct (event_eq_dec (Left b) a); [subst; apply in_eq|].
-      replace (a :: t) with ([a] ++ t) in Hsteps; [|done].
-      destruct (steps_split _ _ _ _ _ _ Hsteps) as (e1' & h1' & Ha & Ht).
-      destruct (steps_trace_event_postponed Hstep Ha) as (e0' & h0' & H0').
-      * intros Hin. destruct Hin; simplify_eq.
-      * by eapply in_cons, IHt.
-    + destruct (event_eq_dec (Right b) a); [subst; apply in_eq|].
-      replace (a :: t) with ([a] ++ t) in Hsteps; [|done].
-      destruct (steps_split _ _ _ _ _ _ Hsteps) as (e1' & h1' & Ha & Ht).
-      destruct (steps_trace_event_postponed Hstep Ha) as (e0' & h0' & H0').
-      * intros Hin. destruct Hin; simplify_eq.
-      * by eapply in_cons, IHt.
-Qed.
-
 Lemma next_events_cons {a b u t} :
   can_swap b a ->
   b ∈ next_events_stateful t u ->
@@ -1772,449 +1718,383 @@ Proof.
     + by eapply IHt.
 Qed.
 
-Definition step_no_event : relation (expr * lock_heap) := λ H H',
-  let (e, h) := H in
-  let (e', h') := H' in
-  step_trace e h e' h' None.
+Inductive steps_trace_n : expr -> lock_heap -> expr -> lock_heap -> trace -> nat -> Prop :=
+  | steps_refl_n e h : steps_trace_n e h e h [] 0
+  | steps_step_none_n e1 h1 e2 h2 e3 h3 t n :
+      step_trace e1 h1 e2 h2 None ->
+      steps_trace_n e2 h2 e3 h3 t n ->
+      steps_trace_n e1 h1 e3 h3 t (S n)
+  | steps_step_some_n e1 h1 e2 h2 e3 h3 b t n :
+      step_trace e1 h1 e2 h2 (Some b) ->
+      steps_trace_n e2 h2 e3 h3 t n ->
+      steps_trace_n e1 h1 e3 h3 (b :: t) (S n).
 
-Lemma rtc_step_no_event_step_trace e e' h :
-  rtc step_no_event (e, h) (e', h) <->
-  steps_trace e h e' h [].
+Lemma steps_trace_n_rtc {e1 h1 e2 h2 t n} :
+  steps_trace_n e1 h1 e2 h2 t n ->
+  steps_trace e1 h1 e2 h2 t.
+Proof.
+  intros Hn. induction Hn; by econstructor.
+Qed.
+
+Lemma steps_trace_exists_n {e1 h1 e2 h2 t} : 
+  steps_trace e1 h1 e2 h2 t <-> exists n, steps_trace_n e1 h1 e2 h2 t n.
 Proof.
   split.
-  - intros Hrtc. remember (e, h) as eh. remember (e', h) as eh'.
-    revert e e' h Heqeh Heqeh'. induction Hrtc;
-    intros e e' h Heqeh Heqeh'; simplify_eq; [constructor|].
-    destruct y as [e0 h0]. simpl in H.
-    assert (Heq := step_trace_none_eq H). simplify_eq.
-    econstructor; by [|apply IHHrtc].
-  - intros Hsteps. remember [] as empty.
-    induction Hsteps; simplify_eq; [done|].
-    apply (rtc_l _ _ (e2, h3) _); [|tauto].
-    destruct (@step_trace_heap_indifferent _ _ _ _ _ h3 H) as [h3' H3'].
-    assert (Heq := step_trace_none_eq H3'). by subst.
+  - intros Hsteps. induction Hsteps;
+    [|destruct IHHsteps..]; eexists;
+    by econstructor.
+  - intros [n Hn].
+    by eapply steps_trace_n_rtc.
 Qed.
 
-Definition step_event : relation (expr * lock_heap) := λ H H',
-  let (e, h) := H in
-  let (e', h') := H' in
-  exists b, step_trace e h e' h' b.
-
-Lemma steps_trace_rtc_step_event e h e' h' :
-  (exists t, steps_trace e h e' h' t) <->
-  rtc step_event (e, h) (e', h').
+Lemma step_base_in_context {k e h e' h' b} :
+  ctxs_trace k ->
+  ¬ is_val e ->
+  step_trace (k e) h e' h' (Some (Base b)) ->
+  exists em,
+    e' = k em /\
+    step_trace e h em h' (Some (Base b)).
 Proof.
-  split.
-  - intros [t Hsteps]. induction Hsteps; [constructor|..];
-    apply (rtc_l _ _ (e2, h2) _); by [eexists|].
-  - intros Hrtc. remember (e, h) as eh. revert e h Heqeh.
-    remember (e', h') as eh'.
-    induction Hrtc; intros e h Heqeh; simplify_eq.
-    + eauto using steps_trace.
-    + destruct y.
-      destruct (IHHrtc eq_refl e0 g eq_refl) as [t' Ht'].
-      destruct H. destruct x;
-      eauto using steps_trace.
+  intros Hctx. revert e h e' h' b.
+  induction Hctx; intros e h e' h' b Hnval Hstep; [eauto|].
+  apply ctx_step_not_val in Hstep; [ | done | by apply ctxs_not_val ].
+  destruct Hstep as (e2' & -> & Hstep).
+  apply IHHctx in Hstep; [|done].
+  destruct Hstep as (em & -> & Hstep).
+  eauto.
 Qed.
 
-Check @sn_wn. Print red. Print sn. Print Acc. Print flip.
-Print wn. Print nf. Print relation.
-About rtc_nsteps. About lt_wf. Print diamond.
-
-Lemma step_trace_val_none_unique {e h v hv e' h'} :
-  step_trace e h (EVal v) hv None ->
-  step_trace e h e' h' None ->
-  e' = EVal v /\ h' = hv.
+Lemma steps_trace_n_heap_indifferent {e1 h1 e2 h2 t n} h1' :
+  steps_trace_n e1 h1 e2 h2 t n ->
+  exists h2', steps_trace_n e1 h1' e2 h2' t n.
 Proof.
-  intros Hstep. remember (EVal v) as ev. remember None as nn.
-  revert e' h'. induction Hstep;
-  intros e0 h0 Hstep0; [ | inv H | done | done].
-  destruct b; [done|]. simpl in Hstep0. simplify_eq.
-  destruct (head_step_trace_uniquer H _ _ _ Hstep0) as
-    (-> & -> & _); eauto.
+  intros Hsteps. revert h1'.
+  induction Hsteps; intros h1'.
+  - eauto using steps_trace_n.
+  - apply step_trace_none_heap_indifferent with (h'' := h1') in H.
+    destruct (IHHsteps h1') as [h2' Hsteps'].
+    exists h2'. by eapply steps_step_none_n.
+  - apply @step_trace_heap_indifferent with (h1' := h1') in H.
+    destruct H as [h2' Hstep].
+    destruct (IHHsteps h2') as [h3' Hstep'].
+    exists h3'. by eapply steps_step_some_n.
 Qed.
 
-Lemma step_trace_val_unique {e h v hv e' h' t t'} :
-  step_trace e h (EVal v) hv t ->
-  step_trace e h e' h' t' ->
-  e' = EVal v /\ h' = hv /\ t' = t.
+Lemma steps_trace_n_exists_left {k e1 e2 h1 v h2 t n} :
+  ctxs_trace k ->
+  steps_trace_n (k (EPar e1 e2)) h1 (EVal v) h2 t n ->
+  exists n' h2' v' hv' t' t'', n' < n /\
+    perm t ((map Left t') ++ t'') /\
+    steps_trace_n e1 h1 (EVal v') hv' t' n' /\
+    steps_trace_n (k (EPar (EVal v') e2)) hv' (EVal v) h2' t'' (n - n').
 Proof.
-  intros Hstep. remember (EVal v) as ev.
-  revert e' h'. induction Hstep;
-  intros e0 h0 Hstep0; [ | inv H | done | done].
-  simplify_eq.
-  destruct (head_step_trace_uniquer H _ _ _ Hstep0) as
-    (-> & -> & ->); eauto.
+  revert k e1 e2 h1 v h2 t.
+  apply (lt_wf_ind n). clear n.
+  intros n IH k e1 e2 h1 v h2 t Hctx Hsteps.
+  destruct n.
+  - inv Hsteps. destruct Hctx; [done | inv H].
+  - inv Hsteps.
+    + assert (Heq := step_trace_none_eq H0). simplify_eq.
+      apply step_none_in_context in H0; [|done].
+      destruct H0 as [(e1' & -> & Hstep) | (e2' & -> & Hstep)].
+      * edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        exists (S n'). do 5 eexists. repeat split;
+        [lia | done | by eapply steps_step_none_n | ].
+        replace (S n - S n') with (n - n'); [done | lia].
+      * edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ]. 
+        exists n'. do 5 eexists. repeat split;
+        [lia | done | done | ].
+        replace (S n - n') with (S (n - n')); [|lia].
+        eapply steps_step_none_n; [|done].
+        apply ctxs_step; [done|].
+        by eapply par_r_step_trace_none, step_trace_none_heap_indifferent.
+    + destruct b.
+      * apply step_base_in_context in H0; [|done|tauto].
+        destruct H0 as (em & -> & Hstep).
+        destruct (par_base_is_join Hstep) as
+          (v1 & v2 & -> & -> & -> & ->).
+        exists 0, h2, v1, h1, []. eexists. simpl. repeat split;
+        [lia | apply perm_refl | constructor | ].
+        eauto using steps_trace_n, ctxs_step with headstep.
+      * apply step_left_some_in_context in H0; [|done].
+        destruct H0 as (e1' & -> & H0).
+        edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        eexists (S n'). do 5 eexists. repeat split;
+        [lia| | by eapply steps_step_some_n | ]; [by apply perm.perm_skip|].
+        replace (S n - S n') with (n - n'); [done | lia].
+      * apply step_right_some_in_context in H0; [|done].
+        destruct H0 as (e2' & -> & H0).
+        edestruct IH as (n' & h2' & v' & hv' & t' & t'' & Hn' &
+          Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        eapply steps_trace_n_heap_indifferent in Hsteps.
+        destruct Hsteps as [h2'' Hsteps].
+        eapply step_trace_heap_indifferent in H0.
+        destruct H0 as [h3' H0].
+        eapply steps_trace_n_heap_indifferent in Hrest.
+        destruct Hrest as [h4' Hrest].
+        exists n', h4', v', h2'', t', ((Right b) :: t'').
+        repeat split; [ lia | | done | ].
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           apply perm_can_swap_all.
+           rewrite Forall_map. apply Forall_true.
+           intros x. constructor.
+        -- replace (S n - n') with (S (n - n')); [|lia].
+           eapply steps_step_some_n; [|done].
+           apply ctxs_step; [done|].
+           by apply par_r_step_trace_some.
 Qed.
 
-Lemma same_step_event_unique {e h e' h' b b'} :
-  step_trace e h e' h' b ->
-  step_trace e h e' h' b' ->
-  b = b'.
+Lemma steps_trace_n_exists_right {k e1 e2 h1 v h2 t n} :
+  ctxs_trace k ->
+  steps_trace_n (k (EPar e1 e2)) h1 (EVal v) h2 t n ->
+  exists n' h2' v' hv' t' t'', n' < n /\
+    perm t ((map Right t') ++ t'') /\
+    steps_trace_n e2 h1 (EVal v') hv' t' n' /\
+    steps_trace_n (k (EPar e1 (EVal v'))) hv' (EVal v) h2' t'' (n - n').
 Proof.
-  intros Hstep Hstep'. revert b' Hstep'.
-  induction Hstep; intros b' Hstep'.
-  - by apply (head_step_trace_unique H) in Hstep'.
-  - apply ctx_step_not_val in Hstep'; [ | done | ].
-    + apply IHHstep. destruct Hstep' as (e2' & Hk & H').
-      apply ctx_trace_injective in Hk; [|done].
-      by subst.
-    + by eapply step_trace_not_val.
-  - inv Hstep'.
-    + inv H. inv H0.
-    + inv H1.
-    + f_equal. eauto.
-    + by apply step_trace_not_eq in H6.
-  - inv Hstep'.
-    + inv H. inv H0.
-    + inv H1.
-    + by apply step_trace_not_eq in H6.
-    + f_equal. eauto.
+  revert k e1 e2 h1 v h2 t.
+  apply (lt_wf_ind n). clear n.
+  intros n IH k e1 e2 h1 v h2 t Hctx Hsteps.
+  destruct n.
+  - inv Hsteps. destruct Hctx; [done | inv H].
+  - inv Hsteps.
+    + assert (Heq := step_trace_none_eq H0). simplify_eq.
+      apply step_none_in_context in H0; [|done].
+      destruct H0 as [(e1' & -> & Hstep) | (e2' & -> & Hstep)].
+      * edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ]. 
+        exists n'. do 5 eexists. repeat split;
+        [lia | done | done | ].
+        replace (S n - n') with (S (n - n')); [|lia].
+        eapply steps_step_none_n; [|done].
+        apply ctxs_step; [done|].
+        by eapply par_l_step_trace_none, step_trace_none_heap_indifferent.
+      * edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        exists (S n'). do 5 eexists. repeat split;
+        [lia | done | by eapply steps_step_none_n | ].
+        replace (S n - S n') with (n - n'); [done | lia].
+    + destruct b.
+      * apply step_base_in_context in H0; [|done|tauto].
+        destruct H0 as (em & -> & Hstep).
+        destruct (par_base_is_join Hstep) as
+          (v1 & v2 & -> & -> & -> & ->).
+        exists 0, h2, v2, h1, []. eexists. simpl. repeat split;
+        [lia | apply perm_refl | constructor | ].
+        eauto using steps_trace_n, ctxs_step with headstep.
+      * apply step_left_some_in_context in H0; [|done].
+        destruct H0 as (e1' & -> & H0).
+        edestruct IH as (n' & h2' & v' & hv' & t' & t'' & Hn' &
+          Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        eapply steps_trace_n_heap_indifferent in Hsteps.
+        destruct Hsteps as [h2'' Hsteps].
+        eapply step_trace_heap_indifferent in H0.
+        destruct H0 as [h3' H0].
+        eapply steps_trace_n_heap_indifferent in Hrest.
+        destruct Hrest as [h4' Hrest].
+        exists n', h4', v', h2'', t', ((Left b) :: t'').
+        repeat split; [ lia | | done | ].
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           apply perm_can_swap_all.
+           rewrite Forall_map. apply Forall_true.
+           intros x. constructor.
+        -- replace (S n - n') with (S (n - n')); [|lia].
+           eapply steps_step_some_n; [|done].
+           apply ctxs_step; [done|].
+           by apply par_l_step_trace_some.
+      * apply step_right_some_in_context in H0; [|done].
+        destruct H0 as (e2' & -> & H0).
+        edestruct IH as (n' & h2' & v' & hv' & t' & t'' &
+          Hn' & Hperm & Hsteps & Hrest);
+        [apply Nat.lt_succ_diag_r | done | done | ].
+        eexists (S n'). do 5 eexists. repeat split;
+        [lia| | by eapply steps_step_some_n | ]; [by apply perm.perm_skip|].
+        replace (S n - S n') with (n - n'); [done | lia].
 Qed.
 
-Ltac finish_diamond H H' :=
-  destruct (H _ H') as [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]]; [|tauto];
-  left; do 2 eexists;
-  eauto using step_trace.
-
-Lemma step_trace_diamond {e0 e1 e2 h1 h2 b} :
-  step_trace e0 h1 e1 h1 None ->
-  step_trace e0 h1 e2 h2 b ->
-  (exists ef hf,
-    step_trace e1 h1 ef hf b /\
-    step_trace e2 h2 ef hf None) \/
-  (e1 = e2 /\ h1 = h2).
-Proof.
-  intros Hstep Hstep'. revert e1 Hstep.
-  induction Hstep'; intros e0 Hstep.
-  - eapply head_step_trace_uniquer in Hstep; [|done].
-    tauto.
-  - apply ctx_step_not_val in Hstep; [ | done | ].
-    + destruct Hstep as (e2' & -> & Hstep).
-      finish_diamond IHHstep' Hstep.
-    + by eapply step_trace_not_val.
-  - inv Hstep.
-    + inv H4. inv H0.
-    + inv H0.
-    + destruct b0; [done|]. finish_diamond IHHstep' H4.
-    + left. exists (EPar e1' e2'), h'. destruct b0; [done | split].
-      * eauto using step_trace.
-      * by eapply par_r_step_trace, step_trace_none_heap_indifferent.
-  - inv Hstep.
-    + inv H4. inv H0.
-    + inv H0.
-    + left. exists (EPar e1' e2'), h'. destruct b0; [done | split].
-      * eauto using step_trace.
-      * by eapply par_l_step_trace, step_trace_none_heap_indifferent.
-    + destruct b0; [done|]. finish_diamond IHHstep' H4.
-Qed.
-
-Lemma nstep_triangle {n e h v hv e' h'} :
-  nsteps step_event (S n) (e, h) (EVal v, hv) ->
-  step_trace e h e' h' None ->
-  nsteps step_event n (e', h') (EVal v, hv).
-Proof.
-  intros Hn Hstep. remember (S n) as Sn.
-  remember (e, h) as eh. remember (EVal v, hv) as ehv.
-  revert e h v hv n e' h' Heqeh Heqehv HeqSn Hstep.
-  induction Hn;
-  intros e h v hv m e' h' Heq Heq' HeqSn Hstep; simplify_eq.
-  destruct y as [e'' h'']. destruct m.
-  { inv Hn. destruct H as [b Hb].
-    destruct b.
-    - destruct e0.
-      + by eapply step_base_unique in Hstep.
-      + by apply step_left_not_val in Hb.
-      + by apply step_right_not_val in Hb.
-    - destruct (step_trace_val_unique Hb Hstep) as (-> & -> & _).
-      constructor. }
-  assert (Heq := step_trace_none_eq Hstep). simplify_eq.
-  destruct H as [b H].
-  destruct (step_trace_diamond Hstep H) as
-    [(em & hm & Hstep' & Hstepm) | [Heq ->]].
-  - specialize (IHHn e'' h'' v hv m  em hm eq_refl eq_refl eq_refl Hstepm).
-    econstructor; [|done]. by exists b.
-  - by simplify_eq.
-Qed.
-
-Lemma step_no_event_eq {e h e' h'} :
-  rtc step_no_event (e, h) (e', h') ->
+Lemma steps_n_none_eq {e h e' h' n} :
+  steps_trace_n e h e' h' [] n ->
   h = h'.
 Proof.
-  intros Hrtc. remember (e, h) as eh. revert e h Heqeh.
-  remember (e', h') as eh'.
-  induction Hrtc; intros e h Heqeh; simplify_eq; [done|].
-  destruct y. erewrite <- IHHrtc; [|done..].
-  by eapply step_trace_none_eq.
+  intros Hn.
+  eapply steps_trace_none_eq.
+  rewrite steps_trace_exists_n.
+  by exists n.
 Qed.
 
-Lemma step_sn e h v h' t :
-  steps_trace e h (EVal v) h' t ->
-  sn (step_no_event) (e, h).
+Lemma steps_trace_none_first {e1 h1 v h2 pt} :
+  steps_trace e1 h1 (EVal v) h2 pt ->
+  pt ≠ [] ->
+  exists e2 h2' t',
+    steps_trace e1 h1 e2 h1 [] /\
+    steps_trace e2 h1 (EVal v) h2' t' /\
+    perm pt t' /\
+    (forall e3 h3 t,
+      step_trace e2 h1 e3 h3 t -> exists b, t = Some b).
 Proof.
   intros Hsteps.
-  assert (Hn : exists t, steps_trace e h (EVal v) h' t) by eauto.
-  rewrite steps_trace_rtc_step_event rtc_nsteps in Hn.
-  destruct Hn as [n Hn]. clear t Hsteps.
-  revert e h v h' Hn. induction n; intros e h v h' Hn.
-  - inv Hn. constructor. intros [e h] Hstep.
-    by apply not_step_trace_val in Hstep.
-  - constructor. intros [e1 h1] Hstep1. simpl in Hstep1.
-    by eapply IHn, nstep_triangle.
-Qed.
-
-Lemma steps_trace_diamond {e h e1 e2 h2 t} :
-  step_trace e h e1 h None ->
-  steps_trace e h e2 h2 t ->
-  exists e',
-    steps_trace e1 h e' h2 t /\
-    steps_trace e2 h2 e' h2 [].
-Proof.
-  intros Hstep Hsteps. revert e1 Hstep.
-  induction Hsteps; intros e0 Hstep.
-  - eauto using steps_trace.
-  - destruct (step_trace_diamond Hstep H) as
-      [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]];
-    [|eauto using steps_trace].
-    assert (Heq := step_trace_none_eq Hstepf1).
-    assert (Heq' := step_trace_none_eq Hstepf2). simplify_eq.
-    destruct (IHHsteps _ Hstepf2) as
-      (e' & He'1 & He'2).
-    eauto using steps_trace.
-  - destruct (step_trace_diamond Hstep H) as
-      [(ef & hf & Hstepf1 & Hstepf2) | [-> ->]].
-    + assert (Heq' := step_trace_none_eq Hstepf2). simplify_eq.
-      destruct (IHHsteps _ Hstepf2) as
-       (e' & He'1 & He'2).
-      eauto using steps_trace.
-    + by eapply (same_step_event_unique Hstep) in H.
-Qed.
-
-Lemma steps_trace_confluent {e h e1 e2 h2 t} :
-  steps_trace e h e1 h [] ->
-  steps_trace e h e2 h2 t ->
-  exists e',
-    steps_trace e1 h e' h2 t /\
-    steps_trace e2 h2 e' h2 [].
-Proof.
-  intros Hsteps Hsteps'. remember [] as nn.
-  revert e2 h2 t Hsteps'.
-  induction Hsteps; intros e' h' t' Hsteps';
-  simplify_eq; [eauto using steps_trace|].
-  assert (Heq := step_trace_none_eq H).
-  assert (Heq' := steps_trace_none_eq Hsteps). simplify_eq.
-  destruct (steps_trace_diamond H Hsteps') as (e'' & H1 & H2).
-  destruct (IHHsteps eq_refl _ _ _ H1) as (e''' & H1' & H2').
-  eauto using steps_trans'.
-Qed.
-
-Ltac red_tac x k :=
-  repeat progress match goal with
-  | |- step_no_event _ _ => eapply (ctx_step_trace k)
-  | H : red step_no_event _ |- _ => destruct H as [[? ?] ?]
-  | H : pure_step_trace _ _ _ |- _ => inv H
-  | H : option_map _ ?b = None |- _ => destruct b; [done|]; clear H
-  | H : head_step_trace _ _ _ _ _ |- _ => inv H
-  | |- red step_no_event _ => exists x
-  | |- ¬ red step_no_event _ => intros [[e' h'] Hstep]
-  | H : step_no_event (EVal _, _) _ |- _ => by apply not_step_trace_val in H
-  | H : step_trace (EVal _) _ _ _ _ |- _ => by apply not_step_trace_val in H
-  | |- head_step_trace _ _ _ _ _ => constructor
-  | |- pure_step_trace _ _ _ => constructor
-  | |- ctx_trace _ => eauto with context
-  | H : ctx_trace _ |- _ => inv H
-  | H : step_no_event (EVar _, _) _ |- _ => inv H
-  | H : is_val ?e |- _ => destruct e; [|done..]; clear H
-  | |- step_no_event (EPair (EVal _) (EVal _), _) _ => eapply head_step_trace_none
-  | |- step_no_event (EFst (EVal _) , _) _ => eapply head_step_trace_none
-  | |- step_no_event (ESnd (EVal _) , _) _ => eapply head_step_trace_none
-  | |- step_no_event (ELet _ (EVal _) _, _) (subst _ _ _, _) => eapply head_step_trace_none
-  | |- step_no_event (EOp _ (EVal _) (EVal _), _) _ => eapply head_step_trace_none
-  | |- step_no_event (EIf (EVal _) _ _, _) _ => eapply head_step_trace_none
-  | |- step_no_event (EWhile _ _, _) _ => eapply head_step_trace_none
-  | |- step_no_event (ESeq (EVal _) _, _) _ => eapply head_step_trace_none
-  | |- step_no_event (EPar (EVal _) (EVal _), _) _ => eapply head_step_trace_none
-  | H : step_no_event (EFst (EVal _), _) _ |- _ => inv H
-  | H : step_no_event (ESnd (EVal _), _) _ |- _ => inv H
-  | |- _ => try done
-  end.
-
-Ltac ered_tac := red_tac () ().
-
-Lemma eval_bin_op_eq_bool v1 v2 v3 :
-  eval_bin_op EqOp v1 v2 = Some v3 ->
-  v3 = VBool true \/ v3 = VBool false.
-Proof.
-  revert v2 v3. induction v1; intros v2 v3 Heval;
-  destruct v2; simpl in Heval; simplify_eq.
-  - tauto.
-  - destruct (eqb b b0); tauto.
-  - destruct (n =? n0); tauto.
-  - destruct (n =? n0); tauto.
-  - destruct (eval_bin_op EqOp v1_1 v2_1) eqn:H1;
-    destruct (eval_bin_op EqOp v1_2 v2_2) eqn:H2;
-    [|simpl in Heval..]; [|by try destruct v..].
-    destruct (IHv1_1 _ _ H1); destruct (IHv1_2 _ _ H2);
-    simpl in Heval; simplify_eq; tauto.
-  - destruct (eqb b b0); tauto.
-Qed.
-
-Global Instance eval_bin_op_dec op v1 v2 :
-  Decision (exists v3, eval_bin_op op v1 v2 = Some v3).
-Proof.
-  destruct op; revert v2; induction v1; intros v2; destruct v2; simpl;
-  try by (right; intros [v3 H]; simplify_eq).
-  all: try by (left; eexists; done).
-  destruct (IHv1_1 v2_1); destruct (IHv1_2 v2_2).
-  - left. destruct e as [v3 Hv3].
-    destruct e0 as [v3' Hv3'].
-    destruct (eval_bin_op_eq_bool _ _ _ Hv3);
-    destruct (eval_bin_op_eq_bool _ _ _ Hv3');
-    simplify_eq; eexists;
-    by rewrite Hv3 Hv3'.
-  - right. intros [v3 Hv3].
-    destruct e as [v4 Hv4].
-    rewrite Hv4 in Hv3.
-    destruct (eval_bin_op EqOp v1_2 v2_2).
-    + destruct v4; destruct v; simpl in Hv3; simplify_eq.
-      apply n. by eexists.
-    + simpl in Hv3. by destruct v4.
-  - right. intros [v3 Hv3].
-    destruct e as [v4 Hv4].
-    rewrite Hv4 in Hv3.
-    destruct (eval_bin_op EqOp v1_1 v2_1).
-    + destruct v4; destruct v; simpl in Hv3; simplify_eq.
-      apply n. by eexists.
-    + simpl in Hv3. by destruct v4.
-  - right. intros [v3 Hv3].
-    destruct (eval_bin_op EqOp v1_1 v2_1);
-    [apply n; by eexists | destruct (eval_bin_op EqOp v1_2 v2_2)];
-    [apply n0; by eexists | done].
-Qed.
-
-(* Necessary to use the lemma sn_wn *)
-Global Instance step_red_dec y :
-  Decision (red step_no_event y).
-Proof.
-  destruct y as [e h]. induction e.
-  - right. ered_tac.
-  - right. ered_tac.
-  - destruct IHe1.
-    + left. ered_tac.
-      red_tac (EPair e e2, g) (fun x => EPair x e2).
-    + destruct (decide (is_val e1)).
-      * ered_tac. destruct IHe2.
-        -- left. ered_tac.
-           red_tac (EPair (EVal v) e, g) (fun x => EPair (EVal v) x).
-        -- destruct (decide (is_val e2)).
-           ++ left. ered_tac. red_tac (EVal (VPair v v0), h) ().
-           ++ right. ered_tac. inv Hstep; ered_tac.
-              apply n0. by exists (e'0, h').
-      * right. ered_tac. inv Hstep; ered_tac.
-        apply n. by exists (e'0, h').
-  - destruct IHe.
-    + left. ered_tac. red_tac (EFst e0, g) (fun x => EFst x).
-    + destruct (decide (is_val e)). 
-      * ered_tac. destruct v.
-        5: { left. red_tac (EVal v1, h) (). }
-        all: right; ered_tac.
-      * right. ered_tac.  inv Hstep; ered_tac.
-        apply n. by exists (e'0, h').
-  - destruct IHe.
-    + left. ered_tac. red_tac (ESnd e0, g) (fun x => ESnd x).
-    + destruct (decide (is_val e)). 
-      * ered_tac. destruct v.
-        5: { left. red_tac (EVal v2, h) (). }
-        all: right; ered_tac.
-      * right. ered_tac. inv Hstep; ered_tac.
-        apply n. by exists (e'0, h').
-  - destruct IHe1.
-    + left. ered_tac.
-      red_tac (ELet s e e2, g) (fun x => ELet s x e2).
-    + destruct (decide (is_val e1)).
-      * ered_tac. left. red_tac (subst s v e2, h) ().
-      * right. ered_tac. inv Hstep; [ered_tac|].
-        ered_tac. apply n. by exists (e'0, h').
-  - destruct IHe1.
-    + left. ered_tac.
-      red_tac (EOp b e e2, g) (fun x => EOp b x e2).
-    + destruct (decide (is_val e1)).
-      * ered_tac. destruct IHe2.
-        -- left. ered_tac.
-           red_tac (EOp b (EVal v) e, g) (fun x => EOp b (EVal v) x).
-        -- destruct (decide (is_val e2)).
-           ++ ered_tac. destruct (decide (exists v3, eval_bin_op b v v0 = Some v3)).
-              ** left. destruct e as [v3 Hv3].
-                 red_tac (EVal v3, h) ().
-              ** right. ered_tac. inv Hstep.
-                 --- ered_tac. apply n1. by eexists.
-                 --- inv H0; ered_tac.
-           ++ right. ered_tac. inv Hstep; ered_tac.
-              apply n0. by exists (e'0, h').
-      * right. ered_tac. inv Hstep; ered_tac.
-        apply n. by exists (e'0, h').
-  - destruct IHe1.
-    + left. ered_tac.
-      red_tac (EIf e e2 e3, g) (fun x => EIf x e2 e3).
-    + destruct (decide (is_val e1)).
-      * ered_tac. destruct v.
-        2: { left. destruct b.
-             - red_tac (e2, h) ().
-             - red_tac (e3, h) (). }
-        all: right; ered_tac; inv Hstep; ered_tac.
-      * right. ered_tac. inv Hstep. ered_tac. inv H0.
-        apply n. by exists (e'0, h').
-  - left. red_tac (EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit), h) ().
-  - destruct IHe1.
-    + left. ered_tac. red_tac (ESeq e e2, g) (fun x => ESeq x e2).
-    + destruct (decide (is_val e1)).
-      * ered_tac. left. red_tac (e2, h) ().
-      * right. ered_tac. inv Hstep; ered_tac.
-        apply n. by exists (e'0, h').
-  - destruct IHe1; [|destruct IHe2].
-    + left. ered_tac.
-      exists (EPar e e2, g).
-      by apply par_l_step_trace_none.
-    + left. ered_tac.
-      exists (EPar e1 e, g).
-      by apply par_r_step_trace_none.
-    + right. ered_tac. inv Hstep; ered_tac.
-      * apply n. by exists (e1', h').
-      * apply n0. by exists (e2', h').
-  - destruct IHe.
-    + left. ered_tac.
-      red_tac (ELock e0, g) (fun x => ELock x).
-    + right. ered_tac. inv Hstep; ered_tac.
-      apply n. by exists (e'0, h').
-  - destruct IHe.
-    + left. ered_tac.
-      red_tac (EUnlock e0, g) (fun x => EUnlock x).
-    + right. ered_tac. inv Hstep; ered_tac.
-      apply n. by exists (e'0, h').
-Qed.
-
-Lemma steps_trace_none_first {e h v h' pt} :
-  steps_trace e h (EVal v) h' pt ->
-  exists e',
-    steps_trace e h e' h [] /\
-    steps_trace e' h (EVal v) h' pt /\
-    (forall e'' h'' t,
-      step_trace e' h e'' h'' t -> exists b, t = Some b).
-Proof.
-  intros Hsteps.
-  assert (Hwn := step_sn _ _ _ _ _ Hsteps).
-  apply sn_wn in Hwn.
-  destruct Hwn as ([e' h''] & Hrtc & Hnf).
-  assert (Heq := step_no_event_eq Hrtc). simplify_eq.
-  rewrite rtc_step_no_event_step_trace in Hrtc.
-  exists e'. repeat split; [done|..].
-  - destruct (steps_trace_confluent Hrtc Hsteps) as
-      (ef & Hstepf1 & Hstepf2).
-    inv Hstepf2; [done|].
-    by apply not_step_trace_val in H.
-  - intros e0 h0 t0 Hstep0.
-    destruct t0; [eauto|].
-    exfalso. apply Hnf. by exists (e0, h0).
+  rewrite steps_trace_exists_n in Hsteps.
+  destruct Hsteps as [n Hsteps].
+  revert e1 h1 v h2 pt Hsteps.
+  apply (lt_wf_ind n); clear n.
+  intros n' IH e1 h1 v h2 pt Hsteps Hnil.
+  inv Hsteps; [|clear Hnil..].
+  - assert (Heq := step_trace_none_eq H). simplify_eq.
+    specialize (IH n (Nat.lt_succ_diag_r n) e2 h3 v h2 pt H0).
+    destruct IH as (e' & h' & t' & Hempty & Hperm & Hrest & Hsome); [done|].
+    exists e', h', t'. split; by [econstructor|].
+  - revert n e1 h1 e2 h3 v h2 t H H0 IH.
+    induction b; intros n e1 h1 e2 h3 v h2 t Hstep Hsteps IH.
+    + exists e1, h2, (Base b :: t). repeat split; [constructor|..].
+      * eapply steps_step_some; [done|].
+        rewrite steps_trace_exists_n. eauto.
+      * apply perm_refl.
+      * intros e'' h'' t' Hstep'.
+        exists (Base b). by eapply step_base_unique.
+    + apply step_left_ctxs in Hstep. destruct Hstep as
+        (k & e1' & e2' & er & Hctx & -> & -> & Hstep).
+      destruct (steps_trace_n_exists_left Hctx Hsteps) as
+        (nl & h2' & vl & hl & tl & tl' & Hltl & Hperml & Hstepl & Hrestl).
+      destruct (steps_trace_n_exists_right Hctx Hrestl) as
+        (nr & h3' & vr & hr & tr & tr' & Hltr & Hpermr & Hstepr & Hrestr).
+      edestruct IHb as (ef & hf & tf & Hf & Hpermf & Hrestf & Hsome);
+      [done | done | | ]; clear IHb.
+      { intros m Hm. eapply IH. lia. }
+      destruct tr.
+      * assert (Heq := steps_n_none_eq Hstepr). simplify_eq.
+        apply steps_trace_n_rtc in Hrestr.
+        eapply steps_trace_heap_indifferent in Hrestr.
+        destruct Hrestr as [h4' Hrestr].
+        exists (k (EPar ef (EVal vr))). do 2 eexists. repeat split.
+        -- apply ctxs_steps; [done|].
+           eapply steps_trans' with (t := []) (t' := []); [..|done].
+           ++ by eapply steps_left.
+           ++ apply steps_trace_n_rtc in Hstepr.
+              eapply steps_right;
+              by [eapply steps_trace_none_heap_indifferent|].
+        -- eapply steps_trans; [|done].
+           eapply ctxs_steps; [done|].
+           by eapply steps_left.
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           eapply perm.perm_trans; [|by apply perm_app_right].
+           rewrite app_comm_cons. apply perm_app.
+           replace (Left b :: map Left tl) with (map Left (b :: tl));
+           by [eapply perm_map_left|].
+        -- intros e'' h'' t' Hstep'.
+           destruct t'; [by eexists|].
+           assert (Heq := step_trace_none_eq Hstep'). simplify_eq.
+           apply step_none_in_context in Hstep'; [|done].
+           destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
+           ++ by eapply Hsome.
+           ++ by apply not_step_trace_val in Hstep'.
+      * apply IH in Hstepr; [ | lia | done].
+        destruct Hstepr as (er' & hr' & tr'' & Hstepr & Hrestr' & Hpermr' & Hsomer).
+        eapply steps_trace_heap_indifferent in Hrestr'.
+        destruct Hrestr' as [h4' Hrestr'].
+        apply steps_trace_n_rtc in Hrestr.
+        eapply steps_trace_heap_indifferent in Hrestr.
+        destruct Hrestr as [h5' Hrestr].
+        exists (k (EPar ef er')). do 2 eexists. repeat split.
+        -- apply ctxs_steps; [done|].
+           eapply steps_trans' with (t := []) (t' := []); [..|done].
+           ++ by eapply steps_left.
+           ++ eapply steps_right;
+              by [eapply steps_trace_none_heap_indifferent|].
+        -- eapply steps_trans; [|eapply steps_trans]; [..|done].
+           ++ eapply ctxs_steps; [done|].
+              by eapply steps_left.
+           ++ eapply ctxs_steps; [done|].
+              by eapply steps_right.
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           rewrite app_comm_cons.
+           replace (Left b :: map Left tl) with (map Left (b :: tl)); [|done].
+           eapply perm.perm_trans; [by eapply perm_app, perm_map_left|].
+           apply perm_app_right. eapply perm.perm_trans; [done|].
+           apply perm_app. by apply perm_map_right.
+        -- intros e'' h'' t' Hstep'.
+           destruct t'; [by eexists|].
+           assert (Heq := step_trace_none_eq Hstep'). simplify_eq.
+           apply step_none_in_context in Hstep'; [|done].
+           destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
+           ++ by eapply Hsome.
+           ++ by eapply Hsomer, step_trace_none_heap_indifferent.
+    + apply step_right_ctxs in Hstep. destruct Hstep as
+        (k & e1' & e2' & el & Hctx & -> & -> & Hstep).
+      destruct (steps_trace_n_exists_right Hctx Hsteps) as
+        (nr & h2' & vr & hr & tr & tr' & Hltr & Hpermr & Hstepr & Hrestr).
+      destruct (steps_trace_n_exists_left Hctx Hrestr) as
+        (nl & h3' & vl & hl & tl & tl' & Hltl & Hperml & Hstepl & Hrestl).
+      edestruct IHb as (ef & hf & tf & Hf & Hpermf & Hrestf & Hsome);
+      [done | done | | ]; clear IHb.
+      { intros m Hm. eapply IH. lia. }
+      destruct tl.
+      * assert (Heq := steps_n_none_eq Hstepl). simplify_eq.
+        apply steps_trace_n_rtc in Hrestl.
+        eapply steps_trace_heap_indifferent in Hrestl.
+        destruct Hrestl as [h4' Hrestl].
+        exists (k (EPar (EVal vl) ef)). do 2 eexists. repeat split.
+        -- apply ctxs_steps; [done|].
+           eapply steps_trans' with (t := []) (t' := []); [..|done].
+           ++ apply steps_trace_n_rtc in Hstepl.
+              eapply steps_left;
+              by [eapply steps_trace_none_heap_indifferent|].
+           ++ by eapply steps_right.
+        -- eapply steps_trans; [|done].
+           eapply ctxs_steps; [done|].
+           by eapply steps_right.
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           eapply perm.perm_trans; [|by apply perm_app_right].
+           rewrite app_comm_cons. apply perm_app.
+           replace (Right b :: map Right tr) with (map Right (b :: tr));
+           by [eapply perm_map_right|].
+        -- intros e'' h'' t' Hstep'.
+           destruct t'; [by eexists|].
+           assert (Heq := step_trace_none_eq Hstep'). simplify_eq.
+           apply step_none_in_context in Hstep'; [|done].
+           destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
+           ++ by apply not_step_trace_val in Hstep'.
+           ++ by eapply Hsome.
+      * apply IH in Hstepl; [ | lia | done].
+        destruct Hstepl as (el' & hl' & tl'' & Hstepl & Hrestl' & Hperml' & Hsomel).
+        eapply steps_trace_heap_indifferent in Hrestl'.
+        destruct Hrestl' as [h4' Hrestl'].
+        apply steps_trace_n_rtc in Hrestl.
+        eapply steps_trace_heap_indifferent in Hrestl.
+        destruct Hrestl as [h5' Hrestl].
+        exists (k (EPar el' ef)). do 2 eexists. repeat split.
+        -- apply ctxs_steps; [done|].
+           eapply steps_trans' with (t := []) (t' := []); [..|done].
+           ++ eapply steps_left;
+              by [eapply steps_trace_none_heap_indifferent|].
+           ++ by eapply steps_right.
+        -- eapply steps_trans; [|eapply steps_trans]; [..|done].
+           ++ eapply ctxs_steps; [done|].
+              by eapply steps_right.
+           ++ eapply ctxs_steps; [done|].
+              by eapply steps_left.
+        -- eapply perm.perm_trans; [by apply perm.perm_skip|].
+           rewrite app_comm_cons.
+           replace (Right b :: map Right tr) with (map Right (b :: tr)); [|done].
+           eapply perm.perm_trans; [by eapply perm_app, perm_map_right|].
+           apply perm_app_right. eapply perm.perm_trans; [done|].
+           apply perm_app. by apply perm_map_left.
+        -- intros e'' h'' t' Hstep'.
+           destruct t'; [by eexists|].
+           assert (Heq := step_trace_none_eq Hstep'). simplify_eq.
+           apply step_none_in_context in Hstep'; [|done].
+           destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
+           ++ by eapply Hsomel, step_trace_none_heap_indifferent.
+           ++ by eapply Hsome.
 Qed.
 
 Lemma steps_trace_not_val {e h e' h' t} :
@@ -2292,14 +2172,18 @@ Lemma steps_trace_heap_locks_stuck e h v h' pt :
 Proof.
   intros Hsteps Hpt Hlock.
   destruct (steps_trace_none_first Hsteps) as
-    (e' & Hnone & Hrest & Hin).
+    (e' & hf & t' & Hnone & Hrest & Hperm & Hin); [done|].
+  apply perm_symm in Hperm.
   exists e', h. repeat split.
   - by eapply steps_trace_valid_steps.
-  - by eapply steps_trace_not_val.
+  - eapply steps_perm with (t' := pt) in Hrest; [|done].
+    destruct Hrest as [h'' Hrest''].
+    by eapply steps_trace_not_val.
   - intros e'' h'' Hstep.
     destruct (step_to_step_trace Hstep) as (t & Hstept & Ht).
     destruct (Hin _ _ _ Hstept) as [b ->].
-    apply (step_trace_in_next_events Hrest) in Hstept.
+    eapply (step_trace_in_next_events Hrest) in Hstept.
+    erewrite next_events_perm in Hstept; [|done].
     by apply (Ht b eq_refl), Hlock.
 Qed.
 

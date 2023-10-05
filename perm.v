@@ -474,6 +474,50 @@ Proof.
     by apply IH, perm_app_single.
 Qed.
 
+Lemma perm_app_right t t0 t1 :
+  perm t0 t1 ->
+  perm (t ++ t0) (t ++ t1).
+Proof.
+  intros Hperm. induction t; [done|].
+  by apply perm_skip.
+Qed.
+
+Lemma perm1_map_left {t t'} :
+  perm1 t t' ->
+  perm1 (map Left t) (map Left t').
+Proof.
+  intros Hperm.
+  induction Hperm; simpl;
+  eauto using can_swap with perm.
+Qed.
+
+Lemma perm_map_left {t t'} :
+  perm t t' ->
+  perm (map Left t) (map Left t').
+Proof.
+  intros Hperm.
+  induction Hperm;
+  eauto using perm1_map_left with perm.
+Qed.
+
+Lemma perm1_map_right {t t'} :
+  perm1 t t' ->
+  perm1 (map Right t) (map Right t').
+Proof.
+  intros Hperm.
+  induction Hperm; simpl;
+  eauto using can_swap with perm.
+Qed.
+
+Lemma perm_map_right {t t'} :
+  perm t t' ->
+  perm (map Right t) (map Right t').
+Proof.
+  intros Hperm.
+  induction Hperm;
+  eauto using perm1_map_right with perm.
+Qed.
+
 (**************************
     Language definition
 **************************)
@@ -482,6 +526,7 @@ Notation lock_heap := (gmap nat bool).
 
 Inductive expr :=
   | EVal : val -> expr
+  | EAmb : expr
   | EVar : string -> expr
   | EPair : expr -> expr -> expr
   | EFst : expr -> expr
@@ -498,6 +543,7 @@ Inductive expr :=
 Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
   match e with
   | EVal _ => e
+  | EAmb => EAmb
   | EVar y => if string_dec y x then EVal w else EVar y
   | EPair e1 e2 => EPair (subst x w e1) (subst x w e2)
   | EFst e' => EFst (subst x w e')
@@ -516,6 +562,7 @@ Fixpoint subst (x : string) (w : val) (e : expr) : expr :=
 
 (* Small steps that don't alter the heap *)
 Inductive pure_step : expr -> expr -> Prop :=
+  | Amb_step n : pure_step EAmb (EVal (VNat n))
   | Pair_step v1 v2 :
       pure_step (EPair (EVal v1) (EVal v2)) (EVal (VPair v1 v2))
   | Fst_step v1 v2 :
