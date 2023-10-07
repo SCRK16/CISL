@@ -779,32 +779,6 @@ Proof.
     by repeat eexists.
 Qed.
 
-(* Duplicate of steps_left, refactor *)
-Lemma steps_left_map e h e' h' t t' {ek} :
-  steps_trace e h e' h' t ->
-  t' = map Left t ->
-  steps_trace (EPar e ek) h (EPar e' ek) h' t'.
-Proof.
-  intros Hsteps ->. induction Hsteps; [constructor|..].
-  - eapply steps_step_none; [|done].
-    by apply par_l_step_trace_none.
-  - eapply steps_step_some; [|done].
-    by apply par_l_step_trace_some.
-Qed.
-
-(* Duplicate of steps_right, refactor *)
-Lemma steps_right_map e h e' h' t t' {ek}:
-  steps_trace e h e' h' t ->
-  t' = map Right t ->
-  steps_trace (EPar ek e) h (EPar ek e') h' t'.
-Proof.
-  intros Hsteps ->. induction Hsteps; [constructor|..].
-  - eapply steps_step_none; [|done].
-    by apply par_r_step_trace_none.
-  - eapply steps_step_some; [|done].
-    by apply par_r_step_trace_some.
-Qed.
-
 Lemma step_trace_some_heap_indifferent h1' {e1 h1 e2 h2 b} :
   step_trace e1 h1 e2 h2 (Some b) ->
   exists h2', step_trace e1 h1' e2 h2' (Some b).
@@ -864,14 +838,14 @@ Proof.
       (e1''' & -> & Hstep2).
     destruct (IHHswap _ _ _ _ _ _ Hstep1 Hstep2) as [h' Hsteps].
     exists h'. apply ctxs_steps; [done|].
-    by eapply steps_left_map.
+    by eapply steps_left.
   - destruct (step_right_ctxs Hstepx) as
       (k & e2' & e2'' & e1' & Hctx & -> & -> & Hstep1).
     destruct (step_right_some_in_context Hctx Hstepy) as
       (e2''' & -> & Hstep2).
     destruct (IHHswap _ _ _ _ _ _ Hstep1 Hstep2) as [h' Hsteps].
     exists h'. apply ctxs_steps; [done|].
-    by eapply steps_right_map.
+    by eapply steps_right.
 Qed.
 
 Lemma steps_swap {e h e' h' x y} :
