@@ -1180,40 +1180,6 @@ Ltac perm_tac :=
   | |- _ => eauto
   end.
 
-Lemma next_events_perm1 t t' u :
-  perm1 t t' ->
-  next_events_stateful t u = next_events_stateful t' u.
-Proof.
-  intros Hperm. revert u.
-  induction Hperm; intros u.
-  - done.
-  - simpl.
-    destruct (decide (set_Forall (can_swap x) u)).
-    + by rewrite IHHperm.
-    + by rewrite IHHperm.
-  - simpl.
-    destruct (decide (set_Forall (can_swap x) u));
-    destruct (decide (set_Forall (can_swap y) u));
-    destruct (decide (set_Forall (can_swap y) ({[x]} ∪ u)));
-    destruct (decide (set_Forall (can_swap x) ({[y]} ∪ u)));
-    try (by (exfalso; perm_tac));
-    replace ({[y]} ∪ ({[x]} ∪ u)) with (({[x]} ∪ ({[y]} ∪ u)));
-    set_solver || exfalso.
-    + apply n0. perm_tac.
-    + apply n0. perm_tac.
-    + apply n. perm_tac.
-Qed.
-
-Lemma next_events_perm t t' :
-  perm t t' ->
-  next_events t = next_events t'.
-Proof.
-  intros Hperm. induction Hperm.
-  - by apply next_events_perm1.
-  - rewrite <- IHHperm.
-    by apply next_events_perm1.
-Qed.
-
 (* Checks wether, given a list of active locks, a base event is locking,
    meaning that a Lock instruction is trying to get a lock that is locked,
    or that an Unlock instruction is trying to release a lock that is unlocked *)
@@ -1906,7 +1872,7 @@ Proof.
   by exists n.
 Qed.
 
-Lemma steps_trace_none_first {e1 h1 v h2 pt} :
+Lemma steps_trace_none_first_perm {e1 h1 v h2 pt} :
   steps_trace e1 h1 (EVal v) h2 pt ->
   pt ≠ [] ->
   exists e2 h2' t',
@@ -2071,6 +2037,23 @@ Proof.
            ++ by eapply Hsome.
 Qed.
 
+Lemma steps_trace_none_first {e1 h1 v h2 pt} :
+  steps_trace e1 h1 (EVal v) h2 pt ->
+  pt ≠ [] ->
+  exists e2 h2',
+    steps_trace e1 h1 e2 h1 [] /\
+    steps_trace e2 h1 (EVal v) h2' pt /\
+    (forall e3 h3 t,
+      step_trace e2 h1 e3 h3 t -> exists b, t = Some b).
+Proof.
+  intros Hsteps Hpt.
+  destruct (steps_trace_none_first_perm Hsteps Hpt) as
+    (e2 & h2' & t' & Hnone & Hrest & Hperm & Hsome).
+  destruct (steps_perm _ _ _ _ _ _ (perm_symm _ _ Hperm) Hrest) as
+    (h2'' & Hrest').
+  eauto.
+Qed.
+
 Lemma steps_trace_not_val {e h e' h' t} :
   steps_trace e h e' h' t ->
   t ≠ [] ->
@@ -2145,19 +2128,15 @@ Lemma steps_trace_heap_locks_stuck e h v h' pt :
   stuck e h.
 Proof.
   intros Hsteps Hpt Hlock.
-  destruct (steps_trace_none_first Hsteps) as
-    (e' & hf & t' & Hnone & Hrest & Hperm & Hin); [done|].
-  apply perm_symm in Hperm.
+  destruct (steps_trace_none_first Hsteps Hpt) as
+    (e' & hf & Hnone & Hrest & Hin).
   exists e', h. repeat split.
   - by eapply steps_trace_valid_steps.
-  - eapply steps_perm with (t' := pt) in Hrest; [|done].
-    destruct Hrest as [h'' Hrest''].
-    by eapply steps_trace_not_val.
+  - by eapply steps_trace_not_val.
   - intros e'' h'' Hstep.
     destruct (step_to_step_trace Hstep) as (t & Hstept & Ht).
     destruct (Hin _ _ _ Hstept) as [b ->].
     eapply (step_trace_in_next_events Hrest) in Hstept.
-    erewrite next_events_perm in Hstept; [|done].
     by apply (Ht b eq_refl), Hlock.
 Qed.
 
