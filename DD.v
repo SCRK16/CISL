@@ -1874,7 +1874,6 @@ Qed.
 
 Lemma steps_trace_none_first_perm {e1 h1 v h2 pt} :
   steps_trace e1 h1 (EVal v) h2 pt ->
-  pt ≠ [] ->
   exists e2 h2' t',
     steps_trace e1 h1 e2 h1 [] /\
     steps_trace e2 h1 (EVal v) h2' t' /\
@@ -1887,11 +1886,13 @@ Proof.
   destruct Hsteps as [n Hsteps].
   revert e1 h1 v h2 pt Hsteps.
   apply (lt_wf_ind n); clear n.
-  intros n' IH e1 h1 v h2 pt Hsteps Hnil.
-  inv Hsteps; [|clear Hnil..].
+  intros n' IH e1 h1 v h2 pt Hsteps.
+  inv Hsteps; [|..].
+  - exists (EVal v), h2, []. repeat split; eauto using steps_trace with perm.
+    intros e3 h3 t Hstep. by apply not_step_trace_val in Hstep.
   - assert (Heq := step_trace_none_eq H). simplify_eq.
     specialize (IH n (Nat.lt_succ_diag_r n) e2 h3 v h2 pt H0).
-    destruct IH as (e' & h' & t' & Hempty & Hperm & Hrest & Hsome); [done|].
+    destruct IH as (e' & h' & t' & Hempty & Hperm & Hrest & Hsome).
     exists e', h', t'. split; by [econstructor|].
   - revert n e1 h1 e2 h3 v h2 t H H0 IH.
     induction b; intros n e1 h1 e2 h3 v h2 t Hstep Hsteps IH.
@@ -1937,7 +1938,7 @@ Proof.
            destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
            ++ by eapply Hsome.
            ++ by apply not_step_trace_val in Hstep'.
-      * apply IH in Hstepr; [ | lia | done].
+      * apply IH in Hstepr; [ | lia].
         destruct Hstepr as (er' & hr' & tr'' & Hstepr & Hrestr' & Hpermr' & Hsomer).
         eapply steps_trace_heap_indifferent in Hrestr'.
         destruct Hrestr' as [h4' Hrestr'].
@@ -2004,7 +2005,7 @@ Proof.
            destruct Hstep' as [(e' & -> & Hstep') | (e' & -> & Hstep')].
            ++ by apply not_step_trace_val in Hstep'.
            ++ by eapply Hsome.
-      * apply IH in Hstepl; [ | lia | done].
+      * apply IH in Hstepl; [ | lia].
         destruct Hstepl as (el' & hl' & tl'' & Hstepl & Hrestl' & Hperml' & Hsomel).
         eapply steps_trace_heap_indifferent in Hrestl'.
         destruct Hrestl' as [h4' Hrestl'].
@@ -2039,15 +2040,14 @@ Qed.
 
 Lemma steps_trace_none_first {e1 h1 v h2 pt} :
   steps_trace e1 h1 (EVal v) h2 pt ->
-  pt ≠ [] ->
   exists e2 h2',
     steps_trace e1 h1 e2 h1 [] /\
     steps_trace e2 h1 (EVal v) h2' pt /\
     (forall e3 h3 t,
       step_trace e2 h1 e3 h3 t -> exists b, t = Some b).
 Proof.
-  intros Hsteps Hpt.
-  destruct (steps_trace_none_first_perm Hsteps Hpt) as
+  intros Hsteps.
+  destruct (steps_trace_none_first_perm Hsteps) as
     (e2 & h2' & t' & Hnone & Hrest & Hperm & Hsome).
   destruct (steps_perm _ _ _ _ _ _ (perm_symm _ _ Hperm) Hrest) as
     (h2'' & Hrest').
@@ -2128,11 +2128,11 @@ Lemma steps_trace_heap_locks_stuck e h v h' pt :
   stuck e h.
 Proof.
   intros Hsteps Hpt Hlock.
-  destruct (steps_trace_none_first Hsteps Hpt) as
+  destruct (steps_trace_none_first Hsteps) as
     (e' & hf & Hnone & Hrest & Hin).
   exists e', h. repeat split.
   - by eapply steps_trace_valid_steps.
-  - by eapply steps_trace_not_val.
+  - by eapply steps_trace_not_val. (* pt ≠ [] used here *)
   - intros e'' h'' Hstep.
     destruct (step_to_step_trace Hstep) as (t & Hstept & Ht).
     destruct (Hin _ _ _ Hstept) as [b ->].
