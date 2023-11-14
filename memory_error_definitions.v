@@ -1,7 +1,8 @@
 From Coq Require Export Strings.String.
-From Coq Require Import Program.Equality.
-From iris.proofmode Require Import tactics.
-Require Import val.
+From iris.proofmode Require Export tactics.
+Require Export separation_logic.
+
+(* Language definition *)
 
 Inductive expr :=
   | EVal : val -> expr
@@ -77,22 +78,22 @@ Inductive head_step : expr -> heap -> expr -> heap -> Prop :=
       pure_step e e' ->
       head_step e h e' h
   | Alloc_headstep h v l :
-      valid_alloc h l →
+      valid_alloc h l ->
       head_step (EAlloc (EVal v)) h (EVal (VRef l)) (<[ l := (Value v) ]> h)
   | Load_headstep h v l :
-      h !! l = Some (Value v) →
+      h !! l = Some (Value v) ->
       head_step (ELoad (EVal (VRef l))) h (EVal v) h
   | Store_headstep h v w l :
-      h !! l = Some (Value w) →
+      h !! l = Some (Value w) ->
       head_step (EStore (EVal (VRef l)) (EVal v)) h (EVal VUnit) (<[ l := (Value v) ]> h)
   | Free_headstep h v l :
-      h !! l = Some (Value v) →
+      h !! l = Some (Value v) ->
       head_step (EFree (EVal (VRef l))) h (EVal VUnit) (<[l := Reserved ]> h)
   | Lock_headstep h l :
-      h !! l = Some (Value (VLock false)) →
+      h !! l = Some (Value (VLock false)) ->
       head_step (ELock (EVal (VRef l))) h (EVal VUnit) (<[ l := (Value (VLock true)) ]> h)
   | Unlock_headstep h l :
-      h !! l = Some (Value (VLock true)) →
+      h !! l = Some (Value (VLock true)) ->
       head_step (EUnlock (EVal (VRef l))) h (EVal VUnit) (<[ l := (Value (VLock false)) ]> h).
 
 Inductive ctx1 : (expr -> expr) -> Prop :=
@@ -119,31 +120,6 @@ Inductive ctx : (expr -> expr) -> Prop :=
   | Id_ctx : ctx (fun x => x)
   | Compose_ctx k1 k2 : ctx1 k1 -> ctx k2 -> ctx (fun x => k1 (k2 x)).
 
-Lemma Single_ctx k : ctx1 k -> ctx k.
-Proof.
-  intros Hk. apply Compose_ctx; [done | constructor].
-Qed.
-
-Create HintDb context.
-Global Hint Resolve Single_ctx : context.
-Global Hint Constructors ctx1 : context.
-Global Hint Constructors ctx : context.
-
-Ltac inv_ctx := repeat
-  match goal with
-  | H : ctx1 _ |- _ => inv H; try done
-  | H : ctx _ |- _ => inv H; try done
-  end.
-
-Lemma context_EVal k e v :
-  ctx k -> 
-  k e = EVal v ->
-  k = (fun x => x) /\ e = EVal v.
-Proof.
-  intros Hk. induction Hk; [done|].
-  intros Hk12. inv H.
-Qed.
-
 Inductive step : expr -> heap -> expr -> heap -> Prop :=
   | do_step k e e' h h' :
       ctx k ->
@@ -158,143 +134,11 @@ Inductive steps : expr -> heap -> expr -> heap -> Prop :=
       steps e2 h2 e3 h3 ->
       steps e1 h1 e3 h3.
 
-Lemma head_step_step e e' h h' :
-  head_step e h e' h' -> step e h e' h'.
-Proof.
-  intros Hhead.
-  apply (do_step (fun x => x)).
-  - repeat constructor.
-  - assumption.
-Qed.
-
-Lemma step_context_step e e' h h' k :
-  ctx k ->
-  step e h e' h' ->
-  step (k e) h (k e') h'.
-Proof.
-  intros Hctx Hstep. induction Hctx; [done|].
-  inv IHHctx. apply (do_step (fun x => (k1 (k x)))); [|done].
-  by apply Compose_ctx.
-Qed.
-
-Lemma steps_context_steps e e' h h' k :
-  ctx k ->
-  steps e h e' h' ->
-  steps (k e) h (k e') h'.
-Proof.
-  intros Hctx Hsteps.
-  induction Hsteps; [apply steps_refl |].
-  apply steps_step with (k e2) h2; [|done].
-  by apply step_context_step.
-Qed.
-
-Lemma step_once e h e' h' :
-  step e h e' h' -> steps e h e' h'.
-Proof.
-  intros Hstep.
-  econstructor; [done | constructor].
-Qed.
-
-Create HintDb headstep.
-Global Hint Resolve step_once : headstep.
-Global Hint Resolve head_step_step : headstep.
-Global Hint Constructors head_step : headstep.
-Global Hint Constructors pure_step : headstep.
-
-Lemma step_heap_mono e m e' m' x :
-  step e m e' m' → m' ### x → m ### x.
-Proof.
-  intros []?. destruct H; 
-  inv H0; try assumption;
-  rewrite map_disjoint_insert_l in H1;
-  by destruct H1.
-Qed.
-
-Lemma steps_heap_mono e m e' m' x :
-  steps e m e' m' → m' ### x -> m ### x.
-Proof.
-  induction 1; eauto using step_heap_mono.
-Qed.
-
-Lemma steps_trans e1 e2 e3 h1 h2 h3 :
-  steps e1 h1 e2 h2 -> steps e2 h2 e3 h3 -> steps e1 h1 e3 h3.
-Proof.
-  intros H1 H2.
-  induction H1; [done|].
-  eauto using steps_step.
-Qed.
-
-Lemma steps_context e k v v' h1 h2 h3 :
-  ctx k ->
-  steps e h1 (EVal v') h2 ->
-  steps (k (EVal v')) h2 (EVal v) h3 ->
-  steps (k e) h1 (EVal v) h3.
-Proof.
-  intros Hctx Hsteps1 Hsteps2.
-  induction Hsteps1; [done|].
-  eapply steps_step.
-  - apply step_context_step; done.
-  - by apply IHHsteps1.
-Qed.
-
-Lemma head_step_frame_equiv e m e' m' :
-  head_step e m e' m' <-> ∀ mf, m' ### mf -> head_step e (m ∪ mf) e' (m' ∪ mf).
-Proof.
-  split.
-  1: {intros. destruct H; rewrite -? insert_union_l; try by econstructor; eauto;
-    try apply lookup_union_Some_l; eauto. constructor.
-    intros e He. specialize (H e). apply H. rewrite <- He.
-    symmetry. apply lookup_union_l.
-    assert (is_Some ((h ∪ mf) !! l)) by (by exists e).
-    rewrite lookup_union_is_Some in H1. destruct H1; [done|].
-    destruct H1. rewrite map_disjoint_insert_l in H0. destruct H0.
-    rewrite H1 in H0. done. }
-  intros. specialize (H ∅). rewrite !right_id in H.
-  apply H. solve_map_disjoint.
-Qed.
-
-Lemma step_frame_equiv e m e' m' :
-  step e m e' m'  ↔ ∀ mf, m' ### mf -> step e (m ∪ mf) e' (m' ∪ mf).
-Proof.
-  split.
-  - intros []. rewrite head_step_frame_equiv in H0.
-    eauto using step.
-  - intros. specialize (H _ (map_disjoint_empty_r _)).
-    by rewrite !right_id_L in H.
-Qed.
-
-Lemma steps_frame_equiv e h e' h' :
-  steps e h e' h' ↔ ∀ hf, h' ### hf → steps e (h ∪ hf) e' (h' ∪ hf).
-Proof.
-  split.
-  - induction 1; eauto using steps.
-    intros.
-    assert (h2 ### hf). { eapply steps_heap_mono; eauto. }
-    rewrite step_frame_equiv in H.
-    eapply steps_step; eauto.
-  - intros. specialize (H _ (map_disjoint_empty_r _)).
-    by rewrite !right_id_L in H.
-Qed.
-
 Definition is_val (e : expr) :=
   match e with
     | EVal _ => True
     | _ => False
   end.
-
-Lemma not_is_val_ctx1 e k :
-  ctx1 k -> ¬ is_val (k e).
-Proof.
-  intros Hctx Hnval.
-  by inv Hctx.
-Qed.
-
-Lemma not_is_val_context e k :
-  ctx k -> ¬ is_val e -> ¬ is_val (k e).
-Proof.
-  intros Hctx. generalize e. induction Hctx; intros e' Hnval;
-  [done | destruct H; easy].
-Qed.
 
 Definition is_lock (e : expr) :=
   match e with
@@ -302,3 +146,68 @@ Definition is_lock (e : expr) :=
     | EUnlock _ => True
     | _ => False
   end.
+
+(* Error *)
+
+Definition imm_unsafe (e : expr) (h : heap) :=
+  ¬ is_val e /\ ¬ is_lock e /\ forall e' h', ¬ step e h e' h'.
+
+Definition is_error (e : expr) (h : heap) :=
+  exists k e', ctx k /\ e = k e' /\ imm_unsafe e' h.
+
+(* CISL triples *)
+
+Definition IL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
+  forall v h', Q v h' -> exists h, P h /\ steps e h (EVal v) h'.
+
+Definition ILERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
+  forall h', Q h' -> exists e' h, P h /\ steps e h e' h' /\ is_error e' h'.
+
+Definition ISL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
+  forall R, IL (P ∗ R)%S e (fun v => Q v ∗ R)%S.
+
+Definition ISLERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
+  forall R, ILERR (P ∗ R)%S e (Q ∗ R)%S.
+
+Definition is_error_or_val (e : expr) (h : heap) (mv : option val) : Prop :=
+  match mv with
+  | Some v => e = EVal v
+  | None => is_error e h
+  end.
+
+Definition IL_Gen (P : iProp) (e : expr) (Q : option val -> iProp) : Prop :=
+  forall mv h', Q mv h' -> exists e' h, P h /\ steps e h e' h' /\ is_error_or_val e' h' mv.
+
+Definition ISL_Gen (P : iProp) (e : expr) (Q : option val -> iProp) : Prop :=
+  forall R, IL_Gen (P ∗ R)%S e (fun mv => Q mv ∗ R)%S.
+
+Definition to_option_some (Q : val -> iProp) : option val -> iProp :=
+  fun mv => match mv with
+  | Some v => Q v
+  | None => (@[False])%S
+  end.
+
+Definition to_option_none (Q : iProp) : option val -> iProp :=
+  fun mv => match mv with
+  | Some v => (@[False])%S
+  | None => Q
+  end.
+
+Definition from_option_some (Q : option val -> iProp) : val -> iProp :=
+  fun v => Q (Some v).
+
+Definition from_option_none (Q : option val -> iProp) : iProp :=
+  Q None.
+
+Definition ISL' (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
+  ISL_Gen P e (to_option_some Q).
+
+Definition ISLERR' (P : iProp) (e : expr) (Q : iProp) : Prop :=
+  ISL_Gen P e (to_option_none Q).
+
+Notation "[[[ P ]]] e [[[ v , Q ]]]" := (ISL P%S e (λ v , Q%S))
+    (at level 20, e, P at level 200, Q at level 200, only parsing).
+Notation "[[[ P ]]] e [[[ Q ]]]" := (ISL P%S e Q%S)
+    (at level 20, e, P at level 200, Q at level 200, only parsing).
+Notation "[[[ P ]]] e [[[ERR: Q ]]]" := (ISLERR P%S e Q%S)
+  (at level 20, e, P at level 200, Q at level 200, only parsing).

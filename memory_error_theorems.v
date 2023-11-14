@@ -1,18 +1,165 @@
-From Coq Require Export Strings.String.
-From iris.proofmode Require Import tactics.
-Require Import Lang.
+Require Import memory_error_definitions.
 
-(*
-Immediate unsafe: An expression is immediately unsafe if:
-  1. It is not a value
-  2. None of the subexpressions within it can step
-*)
+(***************************************
+  Basic lemmas about the language
+***************************************)
 
-Definition imm_unsafe (e : expr) (h : heap) :=
-  ¬ is_val e /\ ¬ is_lock e /\ forall e' h', ¬ step e h e' h'.
+Lemma Single_ctx k : ctx1 k -> ctx k.
+Proof.
+  intros Hk. apply Compose_ctx; [done | constructor].
+Qed.
 
-Definition is_error (e : expr) (h : heap) :=
-  exists k e', ctx k /\ e = k e' /\ imm_unsafe e' h.
+Create HintDb context.
+Global Hint Resolve Single_ctx : context.
+Global Hint Constructors ctx1 : context.
+Global Hint Constructors ctx : context.
+
+Ltac inv_ctx := repeat
+  match goal with
+  | H : ctx1 _ |- _ => inv H; try done
+  | H : ctx _ |- _ => inv H; try done
+  end.
+
+Lemma context_EVal k e v :
+  ctx k -> 
+  k e = EVal v ->
+  k = (fun x => x) /\ e = EVal v.
+Proof.
+  intros Hk. induction Hk; [done|].
+  intros Hk12. inv H.
+Qed.
+
+Lemma head_step_step e e' h h' :
+  head_step e h e' h' -> step e h e' h'.
+Proof.
+  intros Hhead.
+  apply (do_step (fun x => x)).
+  - repeat constructor.
+  - assumption.
+Qed.
+
+Lemma step_context_step e e' h h' k :
+  ctx k ->
+  step e h e' h' ->
+  step (k e) h (k e') h'.
+Proof.
+  intros Hctx Hstep. induction Hctx; [done|].
+  inv IHHctx. apply (do_step (fun x => (k1 (k x)))); [|done].
+  by apply Compose_ctx.
+Qed.
+
+Lemma steps_context_steps e e' h h' k :
+  ctx k ->
+  steps e h e' h' ->
+  steps (k e) h (k e') h'.
+Proof.
+  intros Hctx Hsteps.
+  induction Hsteps; [apply steps_refl |].
+  apply steps_step with (k e2) h2; [|done].
+  by apply step_context_step.
+Qed.
+
+Lemma step_once e h e' h' :
+  step e h e' h' -> steps e h e' h'.
+Proof.
+  intros Hstep.
+  econstructor; [done | constructor].
+Qed.
+
+Create HintDb headstep.
+Global Hint Resolve step_once : headstep.
+Global Hint Resolve head_step_step : headstep.
+Global Hint Constructors head_step : headstep.
+Global Hint Constructors pure_step : headstep.
+
+Lemma step_heap_mono e m e' m' x :
+  step e m e' m' → m' ### x → m ### x.
+Proof.
+  intros []?. destruct H; 
+  inv H0; try assumption;
+  rewrite map_disjoint_insert_l in H1;
+  by destruct H1.
+Qed.
+
+Lemma steps_heap_mono e m e' m' x :
+  steps e m e' m' → m' ### x -> m ### x.
+Proof.
+  induction 1; eauto using step_heap_mono.
+Qed.
+
+Lemma steps_trans e1 e2 e3 h1 h2 h3 :
+  steps e1 h1 e2 h2 -> steps e2 h2 e3 h3 -> steps e1 h1 e3 h3.
+Proof.
+  intros H1 H2.
+  induction H1; [done|].
+  eauto using steps_step.
+Qed.
+
+Lemma steps_context e k v v' h1 h2 h3 :
+  ctx k ->
+  steps e h1 (EVal v') h2 ->
+  steps (k (EVal v')) h2 (EVal v) h3 ->
+  steps (k e) h1 (EVal v) h3.
+Proof.
+  intros Hctx Hsteps1 Hsteps2.
+  induction Hsteps1; [done|].
+  eapply steps_step.
+  - apply step_context_step; done.
+  - by apply IHHsteps1.
+Qed.
+
+Lemma head_step_frame_equiv e m e' m' :
+  head_step e m e' m' <-> ∀ mf, m' ### mf -> head_step e (m ∪ mf) e' (m' ∪ mf).
+Proof.
+  split.
+  - intros. destruct H; rewrite -? insert_union_l; try by econstructor; eauto;
+    try apply lookup_union_Some_l; eauto. constructor.
+    intros e He. specialize (H e). apply H. rewrite <- He.
+    symmetry. apply lookup_union_l. solve_map_disjoint.
+  - intros. specialize (H ∅). rewrite !right_id in H. 
+    solve_map_disjoint.
+Qed.
+
+Lemma step_frame_equiv e m e' m' :
+  step e m e' m'  ↔ ∀ mf, m' ### mf -> step e (m ∪ mf) e' (m' ∪ mf).
+Proof.
+  split.
+  - intros []. rewrite head_step_frame_equiv in H0.
+    eauto using step.
+  - intros. specialize (H _ (map_disjoint_empty_r _)).
+    by rewrite !right_id_L in H.
+Qed.
+
+Lemma steps_frame_equiv e h e' h' :
+  steps e h e' h' ↔ ∀ hf, h' ### hf → steps e (h ∪ hf) e' (h' ∪ hf).
+Proof.
+  split.
+  - induction 1; eauto using steps.
+    intros.
+    assert (h2 ### hf). { eapply steps_heap_mono; eauto. }
+    rewrite step_frame_equiv in H.
+    eapply steps_step; eauto.
+  - intros. specialize (H _ (map_disjoint_empty_r _)).
+    by rewrite !right_id_L in H.
+Qed.
+
+Lemma not_is_val_ctx1 e k :
+  ctx1 k -> ¬ is_val (k e).
+Proof.
+  intros Hctx Hnval.
+  by inv Hctx.
+Qed.
+
+Lemma not_is_val_context e k :
+  ctx k -> ¬ is_val e -> ¬ is_val (k e).
+Proof.
+  intros Hctx. generalize e. induction Hctx; intros e' Hnval;
+  [done | destruct H; easy].
+Qed.
+
+(***************************************
+  Lemmas about the unsafe and is_error
+***************************************)
 
 Lemma unsafe_is_error e h : imm_unsafe e h -> is_error e h.
 Proof.
@@ -50,58 +197,9 @@ Proof.
   by apply Hval.
 Qed.
 
-
-
-(* Notation for triples *)
-
-Definition IL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
-  forall v h', Q v h' -> exists h, P h /\ steps e h (EVal v) h'.
-
-Definition ILERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
-  forall h', Q h' -> exists e' h, P h /\ steps e h e' h' /\ is_error e' h'.
-
-Definition ISL (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
-  forall R, IL (P ∗ R)%S e (fun v => Q v ∗ R)%S.
-
-Definition ISLERR (P : iProp) (e : expr) (Q : iProp) : Prop :=
-  forall R, ILERR (P ∗ R)%S e (Q ∗ R)%S.
-
-Definition is_error_or_val (e : expr) (h : heap) (mv : option val) : Prop :=
-  match mv with
-  | Some v => e = EVal v
-  | None => is_error e h
-  end.
-
-Definition IL_Gen (P : iProp) (e : expr) (Q : option val -> iProp) : Prop :=
-  forall mv h', Q mv h' -> exists e' h, P h /\ steps e h e' h' /\ is_error_or_val e' h' mv.
-
-Definition ISL_Gen (P : iProp) (e : expr) (Q : option val -> iProp) : Prop :=
-  forall R, IL_Gen (P ∗ R)%S e (fun mv => Q mv ∗ R)%S.
-
-
-Definition to_option_some (Q : val -> iProp) : option val -> iProp :=
-  fun mv => match mv with
-  | Some v => Q v
-  | None => (@[False])%S
-  end.
-
-Definition to_option_none (Q : iProp) : option val -> iProp :=
-  fun mv => match mv with
-  | Some v => (@[False])%S
-  | None => Q
-  end.
-
-Definition from_option_some (Q : option val -> iProp) : val -> iProp :=
-  fun v => Q (Some v).
-
-Definition from_option_none (Q : option val -> iProp) : iProp :=
-  Q None.
-
-Definition ISL' (P : iProp) (e : expr) (Q : val -> iProp) : Prop :=
-  ISL_Gen P e (to_option_some Q).
-
-Definition ISLERR' (P : iProp) (e : expr) (Q : iProp) : Prop :=
-  ISL_Gen P e (to_option_none Q).
+(*****************************************
+  Lemmas about the incorrectness triples
+*****************************************)
 
 Lemma to_from_some_id (Q : val -> iProp) :
   from_option_some (to_option_some Q) = Q.
@@ -246,12 +344,7 @@ Proof.
   - by intros [H _].
 Qed.
 
-Notation "[[[ P ]]] e [[[ v , Q ]]]" := (ISL P%S e (λ v , Q%S))
-    (at level 20, e, P at level 200, Q at level 200, only parsing).
-Notation "[[[ P ]]] e [[[ Q ]]]" := (ISL P%S e Q%S)
-    (at level 20, e, P at level 200, Q at level 200, only parsing).
-Notation "[[[ P ]]] e [[[ERR: Q ]]]" := (ISLERR P%S e Q%S)
-  (at level 20, e, P at level 200, Q at level 200, only parsing).
+(* Incorrectness triple: EVal *)
 
 Lemma ISL_val (v : val) : [[[ emp ]]] EVal v [[[ x, @[ x = v] ]]].
 Proof.
@@ -263,7 +356,6 @@ Proof.
 Qed.
 
 (* Context rules *)
-
 Lemma IL_context_all (P : iProp) (Q R : val -> iProp) e k :
   ctx k ->
   IL P e Q ->
@@ -354,8 +446,9 @@ Proof.
     by  eapply steps_context_steps.
 Qed.
 
-(* Cons rules *)
 
+
+(* Cons rules *)
 Lemma IL_cons (P P' : iProp) (Q Q' : val -> iProp) e :
   (P' ⊢ P)%S ->
   (forall v, (Q v  ⊢ Q' v)%S) ->
@@ -434,7 +527,8 @@ Proof.
   apply iSep_assoc.
 Qed.
 
-(* Alternative ISLERR_context_ISL rule *)
+(* Alternative ISLERR_context_ISL rule,
+    follows from previous ISLERR_context_ISL + ISL_cons *)
 Lemma ISLERR_context_ISL_exists (P Q : iProp) (R : val -> iProp) e k :
   ctx k ->
   [[[ P ]]] e [[[ R ]]] ->
@@ -447,7 +541,6 @@ Proof.
 Qed.
 
 (* Frame rules *)
-
 Lemma ISL_frame (R P : iProp) (Q : val -> iProp) e :
   [[[ P ]]] e [[[ Q ]]] ->
   [[[ P ∗ R ]]] e [[[ x, Q x ∗ R ]]].
@@ -499,10 +592,9 @@ Proof.
   - apply iSep_comm.
   - intros v. apply iSep_comm.
   - by apply ISLERR_frame.
-Qed. 
+Qed.
 
-(* Step rules *)
-
+(* pure_step rules *)
 Lemma ISL_pure_step (P : iProp) (Q : val -> iProp) e e' :
   [[[ P ]]] e' [[[ Q ]]] ->
   pure_step e e' ->
@@ -563,9 +655,6 @@ Proof.
 Qed.
 
 (* Disjunction rules *)
-
-(* Change to [P] e [Q1] -> [P] e [Q2] -> [P] e [Q1 \/ Q2] *)
-
 Lemma IL_disj (P P' : iProp) (Q Q' : val -> iProp) e :
   IL P e Q ->
   IL P' e Q' ->
@@ -610,7 +699,6 @@ Proof.
 Qed.
 
 (* Pure rules *)
-
 Lemma ISL_pure (P : iProp) (Q : val -> iProp) (phi : Prop) e :
   (phi -> [[[ P ]]] e [[[ Q ]]]) ->
   [[[ P ]]] e [[[ x, @[phi] ∗ Q x ]]].
@@ -639,7 +727,6 @@ Proof.
 Qed.
 
 (* EAmb rules *)
-
 Lemma ISL_amb n :
   [[[ emp ]]] EAmb [[[ v, @[v = VNat n] ]]].
 Proof.
@@ -689,7 +776,6 @@ Proof.
 Qed.
 
 (* EVar rules *)
-
 Lemma ISLERR_var x :
   [[[ emp ]]] EVar x [[[ERR: emp ]]].
 Proof.
@@ -703,7 +789,6 @@ Proof.
 Qed.
 
 (* ESeq rules *)
-
 Lemma ISL_seq_val (P : iProp) (Q : val -> iProp) v e :
   [[[ P ]]] e [[[ Q ]]] ->
   [[[ P ]]] ESeq (EVal v) e [[[ Q ]]].
@@ -747,7 +832,6 @@ Proof.
 Qed.
 
 (* EOp rules *)
-
 Lemma ISL_op op v1 v2 v3 :
   eval_bin_op op v1 v2 = Some v3 ->
   [[[ emp ]]] EOp op (EVal v1) (EVal v2) [[[ x, @[x = v3] ]]]%S.
@@ -785,7 +869,6 @@ Proof.
 Qed.
 
 (* EIf rules *)
-
 Lemma ISL_if_true (P : iProp) (Q R : val -> iProp) e1 e2 e3 :
   [[[ P ]]] e1 [[[ x, @[x = VBool true] ∗ R x ]]] ->
   [[[ R (VBool true) ]]] e2 [[[ Q ]]] ->
@@ -848,7 +931,6 @@ Proof.
 Qed.
 
 (* EWhile rules *)
-
 Lemma ISL_While P Q e1 e2 :
   [[[ P ]]] EIf e1 (ESeq e2 (EWhile e1 e2)) (EVal VUnit) [[[ Q ]]] ->
   [[[ P ]]] EWhile e1 e2 [[[ Q ]]].
@@ -864,7 +946,6 @@ Proof.
 Qed.
 
 (* EAlloc rules *)
-
 Ltac empty_left H := rewrite left_id; rewrite left_id in H.
 
 (* The basic behavior of alloc *)
@@ -906,7 +987,6 @@ Proof.
 Qed.
 
 (* ELoad rules *)
-
 Lemma ISL_Load l v :
   [[[ l ↦ v ]]] ELoad (EVal (VRef l)) [[[ x, @[x = v] ∗ l ↦ v ]]].
 Proof.
@@ -942,7 +1022,6 @@ Proof.
 Qed.
 
 (* EStore rules *)
-
 Lemma ISL_Store l v w :
   [[[ l ↦ v ]]] EStore (EVal (VRef l)) (EVal w) [[[ x, @[x = VUnit] ∗ l ↦ w ]]].
 Proof.
@@ -983,7 +1062,6 @@ Proof.
 Qed.
 
 (* EFree rules *)
-
 Lemma ISL_free l v :
   [[[ l ↦ v ]]] EFree (EVal (VRef l)) [[[ x, @[x = VUnit] ∗ l ↦ ⊥ ]]].
 Proof.
@@ -1024,7 +1102,6 @@ Proof.
 Qed.
 
 (* EPar rules *)
-
 Lemma ISL_par_val_emp v v' :
   [[[ emp ]]] EPar (EVal v) (EVal v') [[[ x, @[x = VPair v v'] ]]].
 Proof.
@@ -1036,18 +1113,6 @@ Lemma ISL_par_val (Q1 Q2 : val -> iProp) v v' :
 Proof.
   eapply ISL_frame', ISL_par_val_emp.
 Qed.
-
-(* Different possibility in Correctness logic:
-  {P1} e1 {Q1} ->
-  {P2} e2 {Q2} ->
-  (forall v1 v2, Q1 v1 * Q2 v2 |- Q (VPair v1 v2)) ->
-  {P1 * P2} e1 || e2 {Q}.
-  
-  or:
-  {...}
-  ->
-  {P1 * P2} e1 || e2 {fun x => exists v1 v2, [x = VPair v1 v2] * Q1 v1 * Q2 v2}
-*)
 
 Lemma ISL_par (P1 P2 : iProp) (Q1 Q2 : val -> iProp) e1 e2 v1 v2 :
   [[[ P1 ]]] e1 [[[ v, @[ v = v1 ] ∗ Q1 v ]]] ->
@@ -1232,62 +1297,6 @@ Proof.
   by exists ∅, h2.
 Qed.
 
-(* Locks *)
-Definition is_locked (e : expr) (h : heap) :=
-  exists l, e = EVal (VRef l) /\ h !! l = Some (Value (VLock true)).
-
-(*Definition is_deadlock (e : expr) (h : heap) :=
-  (exists k l, ctx k /\ e = k (ELock l)) /\
-  (forall k l e' h', ctx k /\ e = k (ELock l) /\ steps e h e' h' -> is_locked l h').
-*)
-
-Definition is_deadlock (e : expr) (h : heap) :=
-  (exists k l, ctx k /\ e = k (ELock l) /\
-     forall e' h', steps e h e' h' -> is_locked l h').
-
-Print is_deadlock.
-
-(* Wrong definition
-  Definition is_deadlock (e : expr) (h : heap) :=
-  (exists k l, ctx k /\ e = k (ELock l)) /\
-  (forall k l e' h', ctx k /\ e = k (ELock l) -> is_locked l h).
-
-  Example:
-    EPar (
-      ESeq (ELock (EVal (VRef 0))) (EUnlock (EVal (VRef 0)))
-    ) (
-      ESeq (ELock (EVal (VRef 0))) (EUnlock (EVal (VRef 0)))
-    )
-  Then after the first thread does the lock, the definition gives a deadlock,
-  but there is no deadlock since the first thread will unlock the lock immediately
-*)
-
-
-Definition ILDD (P : iProp) (e : expr) (Q : iProp) : Prop :=
-  forall h', Q h' -> exists e' h, P h /\ steps e h e' h' /\ is_deadlock e' h'.
-
-Definition ISLDD (P : iProp) (e : expr) (Q : iProp) : Prop :=
-  forall R, ILDD (P ∗ R)%S e (Q ∗ R)%S.
-
-Notation "[[[ P ]]] e [[[DD: Q ]]]" := (ISLDD P%S e Q%S)
-  (at level 20, e, P at level 200, Q at level 200, only parsing).
-
-Lemma ISLDD_context_ISL (P Q : iProp) (R : val -> iProp) e v k :
-  ctx k ->
-  [[[ P ]]] e [[[ x, @[x = v] ∗ R x]]] ->
-  [[[ R v ]]] k (EVal v) [[[DD: Q ]]] ->
-  [[[ P ]]] k e [[[DD: Q ]]].
-Proof.
-  intros Hk HPR HRQ R' h' HQ.
-  destruct (HRQ R' h' HQ) as (e' & h & HRR' & Hsteps & Hdead).
-  assert (H : ((@[ v = v] ∗ R v) ∗ R')%S h).
-  { by apply iSep_assoc, iPure_intro'. }
-  destruct (HPR R' v h H) as (h0 & HPR' & Hsteps').
-  exists e', h0. do 2 (split; try done).
-  eapply steps_trans; [|done].
-  by apply steps_context_steps.
-Qed.
-
 (********************************************
               Soundness
 ********************************************)
@@ -1311,8 +1320,9 @@ Proof.
   inv Hh. by exists e', h'.
 Qed.
 
-(* Examples *)
-
+(***********
+  Examples
+***********)
 Definition Ex_mem : expr :=
   ELet "x" (EAlloc (EVal (VNat 0))) (
     ELet "z" (EAlloc (EVal (VNat 0))) (
@@ -1418,11 +1428,11 @@ Proof.
   - apply ISLERR_frame_left, ISLERR_store.
 Qed.
 
-Definition Ex_thesis : expr :=
+Definition Ex_basic : expr :=
   EPar (ELoad (EVal (VRef 0))) (EAlloc (EVal (VNat 10))).
 
-Example Ex_thesis_correct :
-  [[[ 0 ↦ ⊥ ]]] Ex_thesis [[[ x, @[x = VPair (VNat 10) (VRef 0)] ∗ 0 ↦ (VNat 10) ]]].
+Example Ex_basic_correct :
+  [[[ 0 ↦ ⊥ ]]] Ex_basic [[[ x, @[x = VPair (VNat 10) (VRef 0)] ∗ 0 ↦ (VNat 10) ]]].
 Proof.
   eapply ISL_par_mirror with (Q := (fun x => 0 ↦ (VNat 10))%S).
   eapply ISL_par_pair, ISL_context with (k := fun x => EPair x _);
@@ -1435,16 +1445,9 @@ Proof.
   apply ISL_frame', ISL_val.
 Qed.
 
-Example Ex_thesis_erroneous :
-  [[[ 0 ↦ ⊥ ]]] Ex_thesis [[[ERR: 0 ↦ ⊥ ]]].
+Example Ex_basic_erroneous :
+  [[[ 0 ↦ ⊥ ]]] Ex_basic [[[ERR: 0 ↦ ⊥ ]]].
 Proof.
   apply ISL_par_err. left.
   apply ISLERR_load.
 Qed.
-
-Definition Ex_race (n : nat) : expr :=
-  ELet "x" (EAlloc (EVal (VNat n))) (
-    EPar
-      (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
-      (EStore (EVar "x") (EOp PlusOp (ELoad (EVar "x")) (EVal (VNat 1))))
-  ).
